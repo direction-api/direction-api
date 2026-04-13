@@ -85,13 +85,16 @@ async function dismissPopups(page) {
             'button:has-text("Decline optional cookies")',
             'button:has-text("Recusar cookies opcionais")',
             'button:has-text("Aceitar tudo")',
-            'button:has-text("Ajustar configurações")'
+            'button:has-text("Ajustar configurações")',
+            'button:has-text("Recusar tudo")',
+            'button:has-text("Accept all cookies")',
+            'button:has-text("Decline all cookies")'
         ];
 
         for (const selector of popupSelectors) {
             const btn = page.locator(selector).first();
             if (await btn.isVisible({ timeout: 1000 })) {
-                await btn.click({ timeout: 2000 }).catch(() => {});
+                await btn.click({ timeout: 2000 }).catch(() => { });
                 logger('INFO', 'SYSTEM', `Popup/Cookie interceptado e fechado: ${selector}`);
                 await page.waitForTimeout(500);
             }
@@ -214,7 +217,7 @@ async function runEngine(page) {
 
 
                     // Aguarda a página carregar completamente antes de procurar os campos
-                    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+                    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => { });
                     await page.waitForTimeout(1500 + Math.random() * 1000);
                     await dismissPopups(page);
 
@@ -239,8 +242,8 @@ async function runEngine(page) {
 
                     // 2️⃣ Preencher usuário com delays humanizados
                     // Usamos force: true para ignorar overlays invisíveis que bloqueiam o clique
-                    await userField.focus(); 
-                    await userField.click({ delay: 80, force: true }); 
+                    await userField.focus();
+                    await userField.click({ delay: 80, force: true });
                     await page.waitForTimeout(400 + Math.random() * 400);
                     await userField.fill('');
                     for (const char of IG_USER) {
@@ -275,14 +278,22 @@ async function runEngine(page) {
                     const SUBMIT_SELECTORS = [
                         'button[type="submit"]',
                         'button:has-text("Entrar")',
+                        'div[role="button"]:has-text("Entrar")',
                         'button:has-text("Log in")',
                         'button:has-text("Log In")',
-                        '[data-testid="royal_login_button"]'
+                        '[data-testid="royal_login_button"]',
+                        'div[role="button"]:has-text("Log in")'
                     ].join(', ');
 
                     const submitBtn = page.locator(SUBMIT_SELECTORS).first();
-                    await submitBtn.waitFor({ state: 'visible', timeout: 8000 });
-                    await submitBtn.click();
+                    try {
+                        await submitBtn.waitFor({ state: 'visible', timeout: 15000 });
+                        await submitBtn.click({ force: true });
+                        logger('INFO', 'AUTH', 'Botão de login clicado.');
+                    } catch (e) {
+                        logger('WARN', 'AUTH', 'Botão de login não encontrado ou invisível. Tentando Enter...');
+                        await page.keyboard.press('Enter');
+                    }
 
                     // 5️⃣ Aguardar navegação
                     await page.waitForTimeout(5000);
@@ -298,7 +309,7 @@ async function runEngine(page) {
                     if (currentUrl.includes('challenge') || currentUrl.includes('two_factor') || currentUrl.includes('checkpoint')) {
                         logger('WARN', 'AUTH', `⚠️  Verificação adicional necessária. URL: ${currentUrl}`);
                         logger('WARN', 'AUTH', 'Aguardando até 5 minutos para aprovação...');
-                        await page.waitForURL('**/direct/inbox/**', { timeout: 300000 }).catch(() => {});
+                        await page.waitForURL('**/direct/inbox/**', { timeout: 300000 }).catch(() => { });
                     }
 
                 } catch (err) {
