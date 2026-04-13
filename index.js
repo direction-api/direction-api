@@ -215,8 +215,17 @@ async function runEngine(page) {
             const context = await browser.newContext({
                 storageState: session ? JSON.parse(session) : undefined,
                 viewport: { width: 1366, height: 768 },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                locale: 'pt-BR',
+                timezoneId: 'America/Sao_Paulo'
             });
+
+            // 🕵️ EXTRA STEALTH: Esconde o fato de ser um bot automatizado
+            await context.addInitScript(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = { runtime: {} };
+            });
+
             const page = await context.newPage();
 
             logger('INFO', 'AUTH', 'Acessando o Instagram...');
@@ -296,67 +305,38 @@ async function runEngine(page) {
                         await page.keyboard.press('Enter');
                     }
 
-                    // 5️⃣ Aguardar transição (Instagram é lento em VPS)
+                    // 5️⃣ Aguardar transição e tela de "Salvar informações"
                     await page.waitForTimeout(10000);
-                    
-                    // Lidar com tela de "Salvar informações de login?"
-                    const saveInfoBtn = page.locator('button:has-text("Salvar informações"), button:has-text("Save info")').first();
+                    const saveInfoBtn = page.locator('button:has-text("Salvar informações"), button:has-text("Save info"), button:has-text("Agora não"), button:has-text("Not Now")').first();
                     if (await saveInfoBtn.isVisible({ timeout: 5000 })) {
-                        logger('INFO', 'AUTH', 'Tela "Salvar informações" detectada. Pulando...');
                         await saveInfoBtn.click().catch(() => {});
                         await page.waitForTimeout(3000);
                     }
 
                     await dismissPopups(page);
 
-                    const currentUrl = page.url();
-                    // Se ainda estiver na página de login e não houver desafio, fomos rejeitados
-                    if ((currentUrl.includes('login') || currentUrl.includes('accounts')) && 
-                        !currentUrl.includes('challenge') && !currentUrl.includes('two_factor') && !currentUrl.includes('checkpoint')) {
-                        
-                        logger('WARN', 'AUTH', 'Ainda na página de login. Tentando um Enter final...');
-                        await page.keyboard.press('Enter');
-                        await page.waitForTimeout(10000);
-                        
-                        if (page.url().includes('login')) {
-                            logger('FATAL', 'AUTH', `Login rejeitado pelo Instagram. URL atual: ${page.url()}`);
-                            throw new Error('LOGIN_REJECTED');
-                        }
+                    // 6️⃣ VALIDAÇÃO REAL: Só salva se realmente conseguir ler o Inbox
+                    logger('INFO', 'AUTH', 'Validando integridade da sessão...');
+                    await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
+                    await page.waitForTimeout(5000);
+
+                    const testData = await fetchInstagramAPI(page);
+                    if (testData && !testData.error) {
+                        await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
+                        logger('INFO', 'AUTH', '✅ Sessão validada e salva no Redis');
+                    } else {
+                        logger('FATAL', 'AUTH', 'Sessão instável detectada após login. Reiniciando...');
+                        throw new Error('SESSION_UNSTABLE');
                     }
-
-
-                    // 6️⃣ Detecta desafio de verificação (2FA / captcha / checkpoint)
-                    if (currentUrl.includes('challenge') || currentUrl.includes('two_factor') || currentUrl.includes('checkpoint')) {
-                        logger('WARN', 'AUTH', `⚠️  Verificação adicional necessária. URL: ${currentUrl}`);
-                        logger('WARN', 'AUTH', 'Aguardando até 5 minutos para aprovação...');
-                        await page.waitForURL('**/direct/inbox/**', { timeout: 300000 }).catch(() => { });
-                    }
-
                 } catch (err) {
                     if (err.message === 'LOGIN_REJECTED') throw err;
                     logger('FATAL', 'AUTH', `Erro no fluxo de login: ${err.message}`);
                     throw new Error('LOGIN_FORM_BLOCKED');
                 }
-
-
-
-                await page.waitForTimeout(2000);
-                await dismissPopups(page);
-
-                // Salva a sessão no Redis após login bem-sucedido
-                await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
-                logger('INFO', 'AUTH', '✅ Sessão salva no Redis');
-
-                // Navega para o inbox e aguarda um tempo de estabilização extra (ESSENCIAL)
-                logger('INFO', 'AUTH', 'Estabilizando conexão com o Instagram...');
-                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
-                await page.waitForTimeout(10000);
-                await dismissPopups(page);
-                await dismissPopups(page);
             }
 
 
-            logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro V16.6 Online');
+            logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro V16.7 Online');
             setBotPause(false);
 
             engineInterval = setInterval(async () => {
