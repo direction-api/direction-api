@@ -198,41 +198,75 @@ async function runEngine(page) {
 
                 try {
                     await dismissPopups(page);
-                    await page.waitForTimeout(2000 + Math.random() * 1500);
 
-                    // 1️⃣ Esperar o campo de usuário (seletor específico, não genérico)
-                    const userField = page.locator('input[name="username"]').first();
-                    await userField.waitFor({ state: 'visible', timeout: 20000 });
+
+                    // Aguarda a página carregar completamente antes de procurar os campos
+                    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+                    await page.waitForTimeout(1500 + Math.random() * 1000);
+                    await dismissPopups(page);
+
+                    // 1️⃣ Campo de usuário — múltiplos seletores para cobrir EN e PT-BR
+                    const USER_SELECTORS = [
+                        'input[name="username"]',
+                        'input[aria-label*="usuário"]',
+                        'input[aria-label*="username"]',
+                        'input[aria-label*="celular"]',
+                        'input[aria-label*="email"]',
+                        'input[placeholder*="usuário"]',
+                        'input[placeholder*="celular"]',
+                        'input[autocomplete="username"]',
+                        'input[type="text"]'   // último recurso
+                    ].join(', ');
+
+                    const userField = page.locator(USER_SELECTORS).first();
+                    await userField.waitFor({ state: 'visible', timeout: 25000 });
                     logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
 
                     // 2️⃣ Preencher usuário com delays humanizados
                     await userField.click({ delay: 80 });
-                    await page.waitForTimeout(300 + Math.random() * 400);
+                    await page.waitForTimeout(400 + Math.random() * 400);
                     await userField.fill('');
                     for (const char of IG_USER) {
-                        await page.keyboard.type(char, { delay: 60 + Math.random() * 100 });
+                        await page.keyboard.type(char, { delay: 65 + Math.random() * 110 });
                     }
 
-                    await page.waitForTimeout(500 + Math.random() * 600);
+                    await page.waitForTimeout(600 + Math.random() * 500);
 
-                    // 3️⃣ Preencher senha
-                    const passField = page.locator('input[name="password"]').first();
+                    // 3️⃣ Campo de senha — múltiplos seletores
+                    const PASS_SELECTORS = [
+                        'input[name="password"]',
+                        'input[type="password"]',
+                        'input[aria-label*="senha"]',
+                        'input[aria-label*="password"]',
+                        'input[placeholder*="senha"]',
+                        'input[autocomplete="current-password"]'
+                    ].join(', ');
+
+                    const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.click({ delay: 80 });
-                    await page.waitForTimeout(300 + Math.random() * 400);
+                    await page.waitForTimeout(400 + Math.random() * 400);
                     await passField.fill('');
                     for (const char of IG_PASS) {
-                        await page.keyboard.type(char, { delay: 60 + Math.random() * 100 });
+                        await page.keyboard.type(char, { delay: 65 + Math.random() * 110 });
                     }
 
-                    await page.waitForTimeout(800 + Math.random() * 700);
+                    await page.waitForTimeout(900 + Math.random() * 600);
 
-                    // 4️⃣ Clicar no botão de submit (mais confiável que pressionar Enter)
-                    const submitBtn = page.locator('button[type="submit"]').first();
+                    // 4️⃣ Botão de submit
+                    const SUBMIT_SELECTORS = [
+                        'button[type="submit"]',
+                        'button:has-text("Entrar")',
+                        'button:has-text("Log in")',
+                        'button:has-text("Log In")',
+                        '[data-testid="royal_login_button"]'
+                    ].join(', ');
+
+                    const submitBtn = page.locator(SUBMIT_SELECTORS).first();
                     await submitBtn.waitFor({ state: 'visible', timeout: 8000 });
                     await submitBtn.click();
 
-                    // 5️⃣ Aguardar navegação ou detecção de erro
+                    // 5️⃣ Aguardar navegação
                     await page.waitForTimeout(5000);
                     await dismissPopups(page);
 
@@ -244,8 +278,8 @@ async function runEngine(page) {
 
                     // 6️⃣ Detecta desafio de verificação (2FA / captcha / checkpoint)
                     if (currentUrl.includes('challenge') || currentUrl.includes('two_factor') || currentUrl.includes('checkpoint')) {
-                        logger('WARN', 'AUTH', `⚠️  Verificação adicional necessária (challenge/2FA). URL: ${currentUrl}`);
-                        logger('WARN', 'AUTH', 'Aguardando 5 minutos para verificação manual ou resolução automática...');
+                        logger('WARN', 'AUTH', `⚠️  Verificação adicional necessária. URL: ${currentUrl}`);
+                        logger('WARN', 'AUTH', 'Aguardando até 5 minutos para aprovação...');
                         await page.waitForURL('**/direct/inbox/**', { timeout: 300000 }).catch(() => {});
                     }
 
@@ -254,6 +288,8 @@ async function runEngine(page) {
                     logger('FATAL', 'AUTH', `Erro no fluxo de login: ${err.message}`);
                     throw new Error('LOGIN_FORM_BLOCKED');
                 }
+
+
 
                 await page.waitForTimeout(2000);
                 await dismissPopups(page);
