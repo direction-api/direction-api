@@ -56,45 +56,26 @@ async function performLogin(page) {
         await page.waitForTimeout(1000);
 
         await page.keyboard.press('Enter');
-        logger('INFO', 'AUTH', 'Enter enviado. Monitorando fluxo de entrada...');
+        logger('INFO', 'AUTH', 'Enter enviado. Aguardando validação das credenciais...');
 
-        // Espera sair da URL de login inicial
+        // 1. Espera apenas sair da tela de login (significa que a senha estava certa)
         await page.waitForFunction(() => !document.URL.includes('accounts/login'), { timeout: 60000 });
 
-        // 🚜 TRATOR DE POPUPS: Injeção JS para matar o OneTap e Notificações
-        for (let i = 0; i < 4; i++) {
-            if (page.url().includes('direct/inbox')) break;
+        logger('INFO', 'AUTH', `Redirecionado para: ${page.url()}`);
 
-            logger('INFO', 'AUTH', `Bypass Popup JS (Tentativa ${i + 1})...`);
-
-            // Injeta código direto no navegador para forçar o clique
-            await page.evaluate(() => {
-                const botoes = Array.from(document.querySelectorAll('button, div[role="button"]'));
-                const alvo = botoes.find(b => {
-                    const texto = b.innerText.toLowerCase();
-                    return texto.includes('agora não') ||
-                        texto.includes('not now') ||
-                        texto.includes('salvar') ||
-                        texto.includes('save');
-                });
-                if (alvo) alvo.click();
-            }).catch(() => { });
-
-            await page.waitForTimeout(3000);
-
-            // Se o clique não levou pro inbox, força a URL
-            if (!page.url().includes('direct/inbox')) {
-                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => { });
-            }
-            await page.waitForTimeout(3000);
-        }
-
-        await page.waitForURL('**/direct/inbox/**', { timeout: 30000 });
+        // 2. O PULO DO GATO: Salva os cookies IMEDIATAMENTE.
+        // Não importa se caiu no OneTap, a sessão já é válida.
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
-        logger('INFO', 'AUTH', '✅ Sessão salva e popups destruídos!');
+        logger('INFO', 'AUTH', '✅ Cookies de sessão ROUBADOS E SALVOS com sucesso!');
+
+        // 3. Tenta forçar a ida pro Inbox de forma rápida.
+        // Se o Instagram der timeout ou bloquear, o erro "Morte detectada" vai reiniciar o bot.
+        // Só que no próximo boot, ele já tem os cookies e pula o login direto.
+        await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+
     } catch (err) {
-        const stamp = Date.now();
-        await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` }).catch(() => { });
+        // Se der erro aqui (como timeout), não tem problema se os cookies já foram salvos.
+        logger('WARN', 'AUTH', 'Ocorreu um travamento, mas a sessão pode já estar garantida para o próximo boot.');
         throw err;
     }
 }
@@ -201,7 +182,7 @@ async function fetchInstagramAPI(page) {
         } catch (e) {
             logger('ERROR', 'CORE', `Morte detectada: ${e.message}`);
             if (browser) await browser.close().catch(() => { });
-            await new Promise(r => setTimeout(r, 60000));
+            await new Promise(r => setTimeout(r, 10000)); // Caiu pra 10s para reiniciar rápido e aproveitar o cookie
         }
     }
 })();
