@@ -56,19 +56,16 @@ async function performLogin(page) {
         await page.waitForTimeout(1000);
 
         await page.keyboard.press('Enter');
-        logger('INFO', 'AUTH', 'Enter enviado. Aguardando validação das credenciais...');
+        logger('INFO', 'AUTH', 'Enter enviado. Aguardando validação...');
 
         await page.waitForFunction(() => !document.URL.includes('accounts/login'), { timeout: 60000 });
 
-        logger('INFO', 'AUTH', `Redirecionado para: ${page.url()}`);
-
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
-        logger('INFO', 'AUTH', '✅ Cookies de sessão ROUBADOS E SALVOS com sucesso!');
+        logger('INFO', 'AUTH', '✅ Cookies ROUBADOS E SALVOS!');
 
         await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-
     } catch (err) {
-        logger('WARN', 'AUTH', 'Ocorreu um travamento, mas a sessão pode já estar garantida para o próximo boot.');
+        logger('WARN', 'AUTH', 'Travamento normal após salvar cookies. Reiniciando...');
         throw err;
     }
 }
@@ -95,14 +92,20 @@ async function fetchInstagramAPI(page) {
         try {
             browser = await chromium.launch({
                 headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--window-size=1280,720' // Força um tamanho de janela
+                ]
             });
 
             const storagePath = `${BROWSER_DATA_DIR}/state.json`;
             const contextOptions = fs.existsSync(storagePath) ? { storageState: storagePath } : {};
             const context = await browser.newContext({
                 ...contextOptions,
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                permissions: ['clipboard-read', 'clipboard-write'] // Dá permissão de colar
             });
 
             browserPage = await context.newPage();
@@ -114,7 +117,7 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // 📬 MOTOR DE ENVIO (OUTBOUND) - ATUALIZADO
+            // 📬 MOTOR DE ENVIO - MODO BRUTO
             amqpChannel.consume(`enviar_mensagem_${INSTANCE_ID}`, async (msg) => {
                 if (!msg) return;
                 isPaused = true;
@@ -122,34 +125,42 @@ async function fetchInstagramAPI(page) {
                 try {
                     await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
 
+                    // 1. Tenta focar usando o Playwright puro
                     const box = browserPage.locator('div[role="textbox"]').first();
                     await box.waitFor({ state: 'visible', timeout: 15000 });
 
-                    await box.focus();
-                    await box.click({ force: true });
+                    // 2. TÁTICA NUCLEAR: Avalia código DENTRO da página pra forçar a injeção do texto
+                    await browserPage.evaluate((mensagem) => {
+                        // Acha a caixa do react
+                        const textbox = document.querySelector('div[role="textbox"]');
+                        if (!textbox) return;
 
-                    // Digita como um humano
-                    await browserPage.keyboard.type(text, { delay: 50 });
+                        textbox.focus();
 
-                    // 1º Segredo: Tempo pro React registrar o texto
+                        // Executa um comando nativo do navegador para inserir o texto, igual a um Ctrl+V
+                        // Isso força o React do Instagram a atualizar o estado e habilitar o botão de Enviar
+                        document.execCommand('insertText', false, mensagem);
+                    }, text);
+
+                    // 3. Tempo pro React processar o insertText e ligar o botão "Enviar"
                     await browserPage.waitForTimeout(1000);
 
-                    // Tenta enviar com Enter
+                    // 4. Manda o Enter via teclado (caso de fallback)
                     await browserPage.keyboard.press('Enter');
 
-                    // Fallback: Se o Enter falhar, clica no botão "Enviar"
+                    // 5. Manda clicar no botão enviar nativo se ele existir
                     const btnSend = browserPage.locator('div[role="button"]:has-text("Enviar"), div[role="button"]:has-text("Send")').first();
-                    if (await btnSend.isVisible({ timeout: 1000 }).catch(() => false)) {
+                    if (await btnSend.isVisible({ timeout: 1500 }).catch(() => false)) {
                         await btnSend.click({ force: true });
                     }
 
-                    // 2º Segredo: Espera a requisição de rede do Instagram terminar de enviar antes de sair da página
-                    await browserPage.waitForTimeout(2500);
+                    // 6. TRANCAR A ROTA: Não deixa ele ir embora sem confirmar que o envio parou
+                    await browserPage.waitForTimeout(3000);
 
                     amqpChannel.ack(msg);
-                    logger('INFO', 'OUTBOUND', `✅ Mensagem FINALIZADA E ENVIADA para a thread ${threadId}`);
+                    logger('INFO', 'OUTBOUND', `✅ Injeção Direta executada para thread ${threadId}`);
                 } catch (e) {
-                    logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
+                    logger('ERROR', 'OUTBOUND', `Falha brutal no envio: ${e.message}`);
                     amqpChannel.nack(msg, false, true);
                 } finally {
                     isPaused = false;
@@ -157,7 +168,7 @@ async function fetchInstagramAPI(page) {
                 }
             });
 
-            // 📨 MOTOR DE RECEBIMENTO (INBOUND)
+            // 📨 MOTOR DE RECEBIMENTO
             while (true) {
                 if (!isPaused) {
                     const data = await fetchInstagramAPI(browserPage);
@@ -180,7 +191,7 @@ async function fetchInstagramAPI(page) {
 
                                         amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
                                         await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
-                                        logger('INFO', 'INBOUND', `📩 Nova mensagem recebida de @${realUsername}`);
+                                        logger('INFO', 'INBOUND', `📩 Nova mensagem de @${realUsername}`);
                                     }
                                 }
                             }
