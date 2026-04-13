@@ -23,17 +23,65 @@ const runningInstances = new Map();
 const pgClient = new Client({
     connectionString: process.env.POSTGRES_URI || 'postgres://postgres:postgres@localhost:5432/direction_db'
 });
-pgClient.connect().catch(err => {
-    console.error('❌ Erro Postgres:', err.message);
-    process.exit(1);
-});
+
+async function connectWithRetry(retries = 10, delay = 3000) {
+    for (let i = 1; i <= retries; i++) {
+        try {
+            await pgClient.connect();
+            console.log('✅ PostgreSQL conectado');
+            return;
+        } catch (err) {
+            console.error(`⏳ Postgres não disponível ainda (tentativa ${i}/${retries}): ${err.message}`);
+            if (i === retries) { console.error('❌ Falha definitiva ao conectar no Postgres.'); process.exit(1); }
+            await new Promise(r => setTimeout(r, delay));
+        }
+    }
+}
+
+// Cria as tabelas automaticamente se não existirem (auto-migrate)
+async function ensureTables() {
+    await pgClient.query(`
+        CREATE TABLE IF NOT EXISTS instances (
+            id          SERIAL PRIMARY KEY,
+            token       UUID NOT NULL UNIQUE,
+            name        VARCHAR(100) NOT NULL,
+            ig_username VARCHAR(100) NOT NULL,
+            ig_password TEXT NOT NULL,
+            status      VARCHAR(30) DEFAULT 'Desconectado',
+            webhook_url TEXT,
+            created_at  TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS contacts (
+            id              SERIAL PRIMARY KEY,
+            instance_id     UUID NOT NULL,
+            username        VARCHAR(100) NOT NULL UNIQUE,
+            thread_id       TEXT,
+            last_message_at TIMESTAMPTZ DEFAULT NOW(),
+            created_at      TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id          SERIAL PRIMARY KEY,
+            contact_id  INT REFERENCES contacts(id) ON DELETE CASCADE,
+            instance_id UUID NOT NULL,
+            text        TEXT,
+            external_id TEXT UNIQUE,
+            received_at TIMESTAMPTZ DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_contact  ON messages(contact_id);
+        CREATE INDEX IF NOT EXISTS idx_contacts_instance ON contacts(instance_id);
+    `);
+    console.log('✅ Tabelas verificadas/criadas com sucesso');
+}
 
 // --- REDIS ---
 const redisClient = redis.createClient({ url: process.env.REDIS_URI || 'redis://localhost:6379' });
-redisClient.connect().catch(err => {
-    console.error('❌ Erro Redis:', err.message);
-    process.exit(1);
-});
+// Conectado no startup() abaixo de forma controlada
+
+
 
 // ============================================================
 // ROTA: POST /api/auth — Autenticação pelo painel
@@ -242,8 +290,28 @@ async function autoRestart() {
     }
 }
 
-fork('consumer.js');
-app.listen(PORT, () => {
-    console.log(`🚀 Direction API rodando em http://0.0.0.0:${PORT}`);
-    setTimeout(autoRestart, 3000);
-});
+// ============================================================
+// Startup — conecta serviços, migra banco e sobe HTTP
+// ============================================================
+async function startup() {
+    // 1. Conecta ao Postgres com retry automático
+    await connectWithRetry();
+
+    // 2. Garante que as tabelas existem (auto-migrate)
+    await ensureTables();
+
+    // 3. Conecta ao Redis
+    await redisClient.connect().catch(err => {
+        console.error('❌ Erro Redis:', err.message);
+        process.exit(1);
+    });
+
+    // 4. Sobe o consumer e o servidor HTTP
+    fork('consumer.js');
+    app.listen(PORT, () => {
+        console.log(`🚀 Direction API rodando em http://0.0.0.0:${PORT}`);
+        setTimeout(autoRestart, 3000);
+    });
+}
+
+startup();
