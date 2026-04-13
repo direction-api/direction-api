@@ -96,7 +96,7 @@ async function fetchInstagramAPI(page) {
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--window-size=1280,720' // Força um tamanho de janela
+                    '--window-size=1280,720'
                 ]
             });
 
@@ -104,8 +104,7 @@ async function fetchInstagramAPI(page) {
             const contextOptions = fs.existsSync(storagePath) ? { storageState: storagePath } : {};
             const context = await browser.newContext({
                 ...contextOptions,
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                permissions: ['clipboard-read', 'clipboard-write'] // Dá permissão de colar
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
             });
 
             browserPage = await context.newPage();
@@ -117,50 +116,53 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // 📬 MOTOR DE ENVIO - MODO BRUTO
+            // 📬 MOTOR DE ENVIO - ANTI LEXICAL EDITOR
             amqpChannel.consume(`enviar_mensagem_${INSTANCE_ID}`, async (msg) => {
                 if (!msg) return;
                 isPaused = true;
                 const { threadId, text } = JSON.parse(msg.content.toString());
+
                 try {
                     await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
 
-                    // 1. Tenta focar usando o Playwright puro
-                    const box = browserPage.locator('div[role="textbox"]').first();
+                    // 1. Respiro vital para o React do Instagram montar o chat e o Lexical Editor
+                    await browserPage.waitForTimeout(3000);
+
+                    // 2. Localiza a caixa de texto EXATA do Lexical
+                    const box = browserPage.locator('div[role="textbox"][data-lexical-editor="true"]').first();
                     await box.waitFor({ state: 'visible', timeout: 15000 });
 
-                    // 2. TÁTICA NUCLEAR: Avalia código DENTRO da página pra forçar a injeção do texto
-                    await browserPage.evaluate((mensagem) => {
-                        // Acha a caixa do react
-                        const textbox = document.querySelector('div[role="textbox"]');
-                        if (!textbox) return;
+                    // 3. Clique real para roubar o foco da página
+                    await box.click();
+                    await browserPage.waitForTimeout(500);
 
-                        textbox.focus();
+                    // 4. Digitação humana (Gatilho obrigatório para o botão "Enviar" aparecer)
+                    // Delay de 80ms simula um humano rápido, mas suficiente pro React processar as letras
+                    await browserPage.keyboard.type(text, { delay: 80 });
 
-                        // Executa um comando nativo do navegador para inserir o texto, igual a um Ctrl+V
-                        // Isso força o React do Instagram a atualizar o estado e habilitar o botão de Enviar
-                        document.execCommand('insertText', false, mensagem);
-                    }, text);
+                    // 5. Espera o React habilitar a interface
+                    await browserPage.waitForTimeout(1500);
 
-                    // 3. Tempo pro React processar o insertText e ligar o botão "Enviar"
-                    await browserPage.waitForTimeout(1000);
-
-                    // 4. Manda o Enter via teclado (caso de fallback)
+                    // 6. Tenta enviar via "Enter" no teclado
                     await browserPage.keyboard.press('Enter');
 
-                    // 5. Manda clicar no botão enviar nativo se ele existir
-                    const btnSend = browserPage.locator('div[role="button"]:has-text("Enviar"), div[role="button"]:has-text("Send")').first();
+                    // 7. Espera para ver se o Enter foi suficiente
+                    await browserPage.waitForTimeout(1000);
+
+                    // 8. FALLBACK MATADOR: Procura a palavra "Enviar" ou "Send" na tela inteira e clica
+                    const btnSend = browserPage.locator('text="Enviar", text="Send"').last();
                     if (await btnSend.isVisible({ timeout: 1500 }).catch(() => false)) {
                         await btnSend.click({ force: true });
+                        logger('INFO', 'OUTBOUND', 'Botão clicado manualmente no fallback.');
                     }
 
-                    // 6. TRANCAR A ROTA: Não deixa ele ir embora sem confirmar que o envio parou
+                    // 9. Trava final de 3 segundos para garantir que o POST de rede do Instagram vá pro servidor
                     await browserPage.waitForTimeout(3000);
 
                     amqpChannel.ack(msg);
-                    logger('INFO', 'OUTBOUND', `✅ Injeção Direta executada para thread ${threadId}`);
+                    logger('INFO', 'OUTBOUND', `✅ Mensagem enviada para a thread ${threadId}`);
                 } catch (e) {
-                    logger('ERROR', 'OUTBOUND', `Falha brutal no envio: ${e.message}`);
+                    logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
                     amqpChannel.nack(msg, false, true);
                 } finally {
                     isPaused = false;
