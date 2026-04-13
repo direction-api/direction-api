@@ -4,6 +4,7 @@ chromium.use(stealth);
 const amqplib = require('amqplib');
 const redis = require('redis');
 const fs = require('fs');
+const path = require('path');
 
 let amqpChannel = null;
 let redisClient = null;
@@ -15,7 +16,7 @@ const IG_PASS = process.env.IG_PASSWORD;
 const INSTANCE_ID = process.env.INSTANCE_NAME;
 const RABBITMQ_URI = process.env.RABBITMQ_URI || 'amqp://localhost';
 const REDIS_URI = process.env.REDIS_URI || 'redis://localhost:6379';
-const BROWSER_DATA_DIR = `/app/browser_data/session_${INSTANCE_ID}`; // Ajustado para evitar conflito de pasta
+const BROWSER_DATA_DIR = `/app/browser_data/session_${INSTANCE_ID}`;
 
 const logger = (lvl, mod, msg) => console.log(`[${new Date().toISOString()}] [${lvl}] [${mod}] ${msg}`);
 
@@ -32,7 +33,7 @@ async function initializeServices() {
             redisClient = redis.createClient({ url: REDIS_URI });
             await redisClient.connect();
 
-            logger('INFO', 'SERVICES', `Serviços online. Ouvindo fila exclusiva: ${mySendQueue}`);
+            logger('INFO', 'SERVICES', `Serviços online. Ouvindo fila: ${mySendQueue}`);
             return;
         } catch (e) {
             logger('WARN', 'SERVICES', `Aguardando infraestrutura... (Tentativa ${i + 1}/15)`);
@@ -57,30 +58,40 @@ async function performLogin(page) {
         await page.keyboard.press('Enter');
         logger('INFO', 'AUTH', 'Enter enviado. Monitorando fluxo de entrada...');
 
-        await page.waitForFunction(() => {
-            const url = document.URL;
-            return url.includes('direct/inbox') || url.includes('onetap') || url.includes('challenge');
-        }, { timeout: 60000 });
+        // Espera sair da URL de login inicial
+        await page.waitForFunction(() => !document.URL.includes('accounts/login'), { timeout: 60000 });
 
-        for (let i = 0; i < 3; i++) {
-            const currentUrl = page.url();
-            if (currentUrl.includes('direct/inbox')) break;
+        // 🚜 TRATOR DE POPUPS: Injeção JS para matar o OneTap e Notificações
+        for (let i = 0; i < 4; i++) {
+            if (page.url().includes('direct/inbox')) break;
 
-            if (currentUrl.includes('onetap')) {
-                logger('INFO', 'AUTH', 'Detectado "Save Login Info". Tentando pular...');
-                const notNowBtn = page.locator('button:has-text("Agora não"), button:has-text("Not Now"), div[role="button"]:has-text("Agora não")').first();
-                if (await notNowBtn.isVisible({ timeout: 5000 })) {
-                    await notNowBtn.click().catch(() => { });
-                }
+            logger('INFO', 'AUTH', `Bypass Popup JS (Tentativa ${i + 1})...`);
+
+            // Injeta código direto no navegador para forçar o clique
+            await page.evaluate(() => {
+                const botoes = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                const alvo = botoes.find(b => {
+                    const texto = b.innerText.toLowerCase();
+                    return texto.includes('agora não') ||
+                        texto.includes('not now') ||
+                        texto.includes('salvar') ||
+                        texto.includes('save');
+                });
+                if (alvo) alvo.click();
+            }).catch(() => { });
+
+            await page.waitForTimeout(3000);
+
+            // Se o clique não levou pro inbox, força a URL
+            if (!page.url().includes('direct/inbox')) {
+                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => { });
             }
-            logger('INFO', 'AUTH', `Forçando navegação para Inbox (Tentativa ${i + 1})...`);
-            await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => { });
             await page.waitForTimeout(3000);
         }
 
         await page.waitForURL('**/direct/inbox/**', { timeout: 30000 });
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
-        logger('INFO', 'AUTH', '✅ Sessão salva. Login concluído!');
+        logger('INFO', 'AUTH', '✅ Sessão salva e popups destruídos!');
     } catch (err) {
         const stamp = Date.now();
         await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` }).catch(() => { });
@@ -153,7 +164,6 @@ async function fetchInstagramAPI(page) {
             });
 
             // 📨 MOTOR DE RECEBIMENTO (INBOUND)
-            // AQUI FOI A CORREÇÃO: Removi o setInterval e coloquei um while travado com await.
             while (true) {
                 if (!isPaused) {
                     const data = await fetchInstagramAPI(browserPage);
@@ -184,10 +194,7 @@ async function fetchInstagramAPI(page) {
                     }
                 }
 
-                // Essa linha trava o código por 5s, impedindo que ele enlouqueça e repita logs.
                 await browserPage.waitForTimeout(5000);
-
-                // Se o instagram deslogar de repente, força a reinicialização segura
                 if (browserPage.url().includes('login')) throw new Error('SESSION_LOST');
             }
 
