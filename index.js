@@ -182,38 +182,80 @@ async function runEngine(page) {
             await page.waitForTimeout(2000);
             await dismissPopups(page);
 
-            if (page.url().includes('login')) {
-                logger('WARN', 'AUTH', 'Login necessário. Aguardando a página renderizar...');
+            if (page.url().includes('login') || page.url().includes('accounts')) {
+                logger('WARN', 'AUTH', 'Sessão expirada ou primeiro acesso. Iniciando login...');
 
                 try {
                     await dismissPopups(page);
+                    await page.waitForTimeout(2000 + Math.random() * 1500);
 
-                    const usernameLocator = page.locator('input[name="username"], input[type="text"], [aria-label*="usuário"]').first();
-                    await usernameLocator.waitFor({ state: 'visible', timeout: 30000 });
+                    // 1️⃣ Esperar o campo de usuário (seletor específico, não genérico)
+                    const userField = page.locator('input[name="username"]').first();
+                    await userField.waitFor({ state: 'visible', timeout: 20000 });
+                    logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
 
-                    logger('INFO', 'AUTH', 'Campo encontrado. Injetando credenciais...');
-                    await usernameLocator.click();
-                    await page.keyboard.type(IG_USER, { delay: 50 });
-                    await page.keyboard.press('Tab');
-                    await page.keyboard.type(IG_PASS, { delay: 50 });
+                    // 2️⃣ Preencher usuário com delays humanizados
+                    await userField.click({ delay: 80 });
+                    await page.waitForTimeout(300 + Math.random() * 400);
+                    await userField.fill('');
+                    for (const char of IG_USER) {
+                        await page.keyboard.type(char, { delay: 60 + Math.random() * 100 });
+                    }
 
-                    await Promise.all([
-                        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => { }),
-                        page.keyboard.press('Enter')
-                    ]);
+                    await page.waitForTimeout(500 + Math.random() * 600);
+
+                    // 3️⃣ Preencher senha
+                    const passField = page.locator('input[name="password"]').first();
+                    await passField.waitFor({ state: 'visible', timeout: 10000 });
+                    await passField.click({ delay: 80 });
+                    await page.waitForTimeout(300 + Math.random() * 400);
+                    await passField.fill('');
+                    for (const char of IG_PASS) {
+                        await page.keyboard.type(char, { delay: 60 + Math.random() * 100 });
+                    }
+
+                    await page.waitForTimeout(800 + Math.random() * 700);
+
+                    // 4️⃣ Clicar no botão de submit (mais confiável que pressionar Enter)
+                    const submitBtn = page.locator('button[type="submit"]').first();
+                    await submitBtn.waitFor({ state: 'visible', timeout: 8000 });
+                    await submitBtn.click();
+
+                    // 5️⃣ Aguardar navegação ou detecção de erro
+                    await page.waitForTimeout(5000);
+                    await dismissPopups(page);
+
+                    const currentUrl = page.url();
+                    if (currentUrl.includes('login') && !currentUrl.includes('challenge') && !currentUrl.includes('two_factor')) {
+                        logger('FATAL', 'AUTH', `Login rejeitado pelo Instagram. URL atual: ${currentUrl}`);
+                        throw new Error('LOGIN_REJECTED');
+                    }
+
+                    // 6️⃣ Detecta desafio de verificação (2FA / captcha / checkpoint)
+                    if (currentUrl.includes('challenge') || currentUrl.includes('two_factor') || currentUrl.includes('checkpoint')) {
+                        logger('WARN', 'AUTH', `⚠️  Verificação adicional necessária (challenge/2FA). URL: ${currentUrl}`);
+                        logger('WARN', 'AUTH', 'Aguardando 5 minutos para verificação manual ou resolução automática...');
+                        await page.waitForURL('**/direct/inbox/**', { timeout: 300000 }).catch(() => {});
+                    }
 
                 } catch (err) {
-                    logger('FATAL', 'AUTH', 'O Instagram bloqueou o formulário ou timeout excedido.');
+                    if (err.message === 'LOGIN_REJECTED') throw err;
+                    logger('FATAL', 'AUTH', `Erro no fluxo de login: ${err.message}`);
                     throw new Error('LOGIN_FORM_BLOCKED');
                 }
 
-                await page.waitForTimeout(3000);
-                await dismissPopups(page);
+                await page.waitForTimeout(2000);
                 await dismissPopups(page);
 
+                // Salva a sessão no Redis após login bem-sucedido
                 await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
+                logger('INFO', 'AUTH', '✅ Sessão salva no Redis');
+
+                // Navega para o inbox
                 await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' });
+                await page.waitForTimeout(2000);
             }
+
 
             logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro V16.6 Online');
             setBotPause(false);
@@ -282,14 +324,18 @@ async function runEngine(page) {
             await new Promise(() => { });
 
         } catch (e) {
+            const isLoginError = e.message === 'LOGIN_FORM_BLOCKED' || e.message === 'LOGIN_REJECTED';
             if (e.message !== 'SESSION_LOST' && !String(e.message).includes('SESSION_LOST')) {
                 logger('ERROR', 'CORE', `Crash Detectado: ${e.message}`);
             }
-            logger('INFO', 'CORE', 'Reboot do motor em 5s...');
             if (engineInterval) clearInterval(engineInterval);
             if (browser) await browser.close();
             setBotPause(false);
-            await new Promise(r => setTimeout(r, 5000));
+
+            // Backoff maior para erros de login (evita banimento por tentativas em loop)
+            const rebootDelay = isLoginError ? 120000 : 5000;
+            logger('INFO', 'CORE', `Reboot do motor em ${rebootDelay / 1000}s...`);
+            await new Promise(r => setTimeout(r, rebootDelay));
         }
     }
 })();
