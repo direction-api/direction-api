@@ -124,9 +124,15 @@ async function fetchInstagramAPI(page) {
                 }
             });
 
-            if (response.status === 401 || response.status === 403) return { error: 'AUTH_EXPIRED' };
+            if (response.status === 401 || response.status === 403) {
+                return { error: `AUTH_${response.status}` };
+            }
+            if (!response.ok) return { error: `HTTP_${response.status}` };
+            
             return await response.json();
-        } catch (e) { return null; }
+        } catch (e) { 
+            return { error: 'FETCH_FAILED', details: e.message }; 
+        }
     });
 }
 
@@ -156,10 +162,12 @@ async function runEngine(page) {
     }
 
     const data = await fetchInstagramAPI(page);
-
+    
     if (data?.error) {
-        logger('WARN', 'AUTH', `Anomalia de API: ${data.error}`);
-        if (data.error === 'AUTH_EXPIRED') throw new Error('SESSION_LOST');
+        logger('WARN', 'AUTH', `Anomalia de API: ${data.error} ${data.details || ''}`);
+        if (data.error.includes('AUTH_401') || data.error.includes('AUTH_403')) {
+            throw new Error('SESSION_LOST');
+        }
         return;
     }
 
@@ -222,8 +230,22 @@ async function runEngine(page) {
 
             // 🕵️ EXTRA STEALTH: Esconde o fato de ser um bot automatizado
             await context.addInitScript(() => {
+                // Remove traços do WebDriver
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                
+                // Mimetiza plugins e linguagens comuns
+                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+
                 window.chrome = { runtime: {} };
+                
+                // Impede detecção de automação por stack trace
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
             });
 
             const page = await context.newPage();
@@ -318,15 +340,22 @@ async function runEngine(page) {
                     // 6️⃣ VALIDAÇÃO REAL: Só salva se realmente conseguir ler o Inbox
                     logger('INFO', 'AUTH', 'Validando integridade da sessão...');
                     await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
-                    await page.waitForTimeout(5000);
-
-                    const testData = await fetchInstagramAPI(page);
-                    if (testData && !testData.error) {
-                        await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
-                        logger('INFO', 'AUTH', '✅ Sessão validada e salva no Redis');
+                    
+                    // Espera por um elemento real do inbox aparecer (a lista de threads)
+                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6').first().isVisible({ timeout: 15000 }).catch(() => false);
+                    
+                    if (inboxLoaded) {
+                        const testData = await fetchInstagramAPI(page);
+                        if (testData && !testData.error) {
+                            await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
+                            logger('INFO', 'AUTH', '✅ Sessão validada e salva no Redis');
+                        } else {
+                            logger('FATAL', 'AUTH', `Sessão instável: ${testData?.error || 'Desconhecido'}`);
+                            throw new Error('SESSION_UNSTABLE');
+                        }
                     } else {
-                        logger('FATAL', 'AUTH', 'Sessão instável detectada após login. Reiniciando...');
-                        throw new Error('SESSION_UNSTABLE');
+                        logger('FATAL', 'AUTH', 'Inbox não renderizou visualmente. Bloqueio detectado.');
+                        throw new Error('INBOX_NOT_RENDERED');
                     }
                 } catch (err) {
                     if (err.message === 'LOGIN_REJECTED') throw err;
