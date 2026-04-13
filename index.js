@@ -54,26 +54,34 @@ async function performLogin(page) {
         await page.keyboard.press('Enter');
         logger('INFO', 'AUTH', 'Enter enviado. Monitorando fluxo de entrada...');
 
-        // 🛡️ DETECTOR DE FLUXO: Pode cair no Inbox, OneTap ou 2FA
-        await page.waitForFunction(() => {
-            const url = document.URL;
-            return url.includes('direct/inbox') || url.includes('onetap') || url.includes('accounts/login');
-        }, { timeout: 60000 });
+        // 1. Espera sair da página de login (qualquer coisa que não seja accounts/login)
+        await page.waitForFunction(() => !document.URL.includes('accounts/login'), { timeout: 60000 });
 
-        // Se cair no OneTap (Salvar Informações), clica em "Agora não"
-        if (page.url().includes('onetap')) {
-            logger('INFO', 'AUTH', 'Detectado "Save Login Info". Pulando...');
-            const notNowBtn = page.locator('button:has-text("Agora não"), button:has-text("Not Now"), div[role="button"]:has-text("Agora não")').first();
-            if (await notNowBtn.isVisible({ timeout: 10000 })) {
-                await notNowBtn.click();
+        // 2. Loop de bypass para OneTap e Notificações
+        for (let i = 0; i < 3; i++) {
+            const currentUrl = page.url();
+            if (currentUrl.includes('direct/inbox')) break;
+
+            if (currentUrl.includes('onetap') || currentUrl.includes('accounts/onetap')) {
+                logger('INFO', 'AUTH', 'Detectado "Save Login Info". Tentando pular...');
+                const notNowBtn = page.locator('button:has-text("Agora não"), button:has-text("Not Now"), [role="button"]:has-text("Agora não")').first();
+                if (await notNowBtn.isVisible({ timeout: 5000 })) {
+                    await notNowBtn.click().catch(() => { });
+                    await page.waitForTimeout(2000);
+                }
             }
+
+            // Se ainda não estiver no inbox, força a navegação
+            logger('INFO', 'AUTH', `Tentativa ${i + 1}: Forçando navegação para o Inbox...`);
+            await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => { });
+            await page.waitForTimeout(3000);
         }
 
-        // Agora sim, espera o Inbox final
+        // 3. Validação Final
         await page.waitForURL('**/direct/inbox/**', { timeout: 30000 });
 
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
-        logger('INFO', 'AUTH', '✅ Sessão persistida!');
+        logger('INFO', 'AUTH', '✅ Sessão persistida e OneTap ignorado!');
     } catch (err) {
         const stamp = Date.now();
         await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` });
