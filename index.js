@@ -114,11 +114,10 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // MOTOR SÍNCRONO: Loop infinito limpo e em sequência.
             while (true) {
                 if (browserPage.isClosed()) throw new Error('Navegador fechado inesperadamente');
 
-                // 1. OUTBOUND (PULL MODO - Lê apenas 1 mensagem por vez, se houver)
+                // 1. OUTBOUND (Modo Destruidor de Popups)
                 const mySendQueue = `enviar_mensagem_${INSTANCE_ID}`;
                 const msg = await amqpChannel.get(mySendQueue, { noAck: false });
 
@@ -128,39 +127,49 @@ async function fetchInstagramAPI(page) {
                         logger('INFO', 'OUTBOUND', `Iniciando envio para ${threadId}...`);
                         await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
 
-                        await browserPage.waitForTimeout(3000); // Respiro pro React montar
+                        await browserPage.waitForTimeout(3000);
 
-                        const box = browserPage.locator('div[role="textbox"][data-lexical-editor="true"]').first();
-                        await box.waitFor({ state: 'visible', timeout: 15000 });
-
-                        await box.click();
+                        // DESTRUIDOR DE POPUPS: Aperta ESC duas vezes para matar a tela de "Ativar Notificações"
+                        await browserPage.keyboard.press('Escape');
+                        await browserPage.waitForTimeout(500);
+                        await browserPage.keyboard.press('Escape');
                         await browserPage.waitForTimeout(500);
 
-                        await browserPage.keyboard.type(text, { delay: 80 });
-                        await browserPage.waitForTimeout(1500);
+                        // O locator procura pela caixa de texto no DOM (estado "attached", mesmo que haja algo invisível por cima)
+                        const box = browserPage.locator('div[role="textbox"][data-lexical-editor="true"]').first();
+                        await box.waitFor({ state: 'attached', timeout: 15000 });
 
+                        // Foca e clica com { force: true } para ignorar qualquer barreira invisível
+                        await box.focus();
+                        await box.click({ force: true });
+
+                        // Digita o texto para acionar o estado do React
+                        await browserPage.keyboard.type(text, { delay: 50 });
+                        await browserPage.waitForTimeout(1000);
+
+                        // Tenta mandar com Enter
                         await browserPage.keyboard.press('Enter');
                         await browserPage.waitForTimeout(1000);
 
+                        // Fallback absoluto: clica em "Enviar" com força bruta se o Enter não for suficiente
                         const btnSend = browserPage.locator('text="Enviar", text="Send"').last();
                         if (await btnSend.isVisible({ timeout: 1500 }).catch(() => false)) {
                             await btnSend.click({ force: true });
                         }
 
-                        await browserPage.waitForTimeout(3000); // Garante que saiu do seu servidor
+                        await browserPage.waitForTimeout(3000); // Tempo vital para a rede do Instagram enviar a msg
 
                         amqpChannel.ack(msg);
                         logger('INFO', 'OUTBOUND', `✅ Mensagem enviada com sucesso para ${threadId}`);
                     } catch (e) {
                         logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
-                        amqpChannel.nack(msg, false, true); // Devolve pra fila se falhar
+                        amqpChannel.nack(msg, false, true);
                     }
 
-                    // Voltar pro inbox de forma segura antes de ler mensagens novas
                     await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { });
                 }
 
-                // 2. INBOUND (Ler mensagens novas)
+                // 2. INBOUND
                 const data = await fetchInstagramAPI(browserPage);
                 if (data?.inbox?.threads) {
                     const myUserId = await browserPage.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
@@ -188,10 +197,7 @@ async function fetchInstagramAPI(page) {
                     }
                 }
 
-                // 3. RESPIRAR (Pausa antes do próximo ciclo)
                 await browserPage.waitForTimeout(4000);
-
-                // 4. CHECAGEM DE SEGURANÇA
                 if (browserPage.url().includes('login')) throw new Error('SESSION_LOST');
             }
 
