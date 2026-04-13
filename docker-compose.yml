@@ -24,6 +24,8 @@ services:
         condition: service_healthy
       direction-redis:
         condition: service_healthy
+    volumes:
+      - ./browser_data:/app/browser_data
     networks:
       - direction-network
 

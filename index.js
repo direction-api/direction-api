@@ -13,6 +13,7 @@ const IG_USER = process.env.IG_USERNAME;
 const IG_PASS = process.env.IG_PASSWORD;
 const RABBITMQ_URI = process.env.RABBITMQ_URI || 'amqp://localhost';
 const REDIS_URI = process.env.REDIS_URI || 'redis://localhost:6379';
+const BROWSER_DATA_DIR = './browser_data/session_' + IG_USER;
 
 let amqpChannel = null;
 let redisClient = null;
@@ -217,54 +218,57 @@ async function runEngine(page) {
 
         try {
             await initializeServices();
-            // 🛡️ HEADLESS VERDADEIRO DE PRODUÇÃO
-            browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-            const session = await redisClient.get(`ai_session:${IG_USER}`);
 
-            // 🛡️ VIEWPORT FORÇADO: Garante que o navegador invisível tenha tamanho de notebook real
-            const context = await browser.newContext({
-                storageState: session ? JSON.parse(session) : undefined,
+            // 🛡️ PERSISTENT CONTEXT: Simula um navegador instalado de verdade (Muito mais estável)
+            const context = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
+                headless: true,
+                args: [
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-infobars',
+                    '--window-position=0,0',
+                    '--window-size=1366,768'
+                ],
                 viewport: { width: 1366, height: 768 },
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 locale: 'pt-BR',
                 timezoneId: 'America/Sao_Paulo'
             });
 
-            // 🕵️ EXTRA STEALTH: Esconde o fato de ser um bot automatizado
+            // 🕵️ EXTRA STEALTH: Esconde rastros de automação e mimetiza hardware
             await context.addInitScript(() => {
-                // Remove traços do WebDriver
+                // Remove rastro do WebDriver
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 
-                // Mimetiza plugins e linguagens comuns
+                // Mimetiza placa de vídeo (WebGL)
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) return 'Intel Open Source Technology Center';
+                    if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 520 (Skylake GT2)';
+                    return getParameter.apply(this, arguments);
+                };
+
+                // Mimetiza plugins e linguagens
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
 
                 window.chrome = { runtime: {} };
-                
-                // Impede detecção de automação por stack trace
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
             });
 
-            const page = await context.newPage();
+            const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
-            logger('INFO', 'AUTH', 'Acessando o Instagram...');
+            logger('INFO', 'AUTH', 'Acessando o Instagram com Perfil Persistente...');
             await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(3000);
             await dismissPopups(page);
 
+            // Se o contexto persistente não estiver logado, fazemos o login
             if (page.url().includes('login') || page.url().includes('accounts')) {
-                logger('WARN', 'AUTH', 'Sessão expirada ou primeiro acesso. Iniciando login...');
+                logger('WARN', 'AUTH', 'Sessão não encontrada no perfil. Iniciando login...');
 
                 try {
                     await dismissPopups(page);
-
-
-                    // Aguarda a página carregar completamente antes de procurar os campos
                     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => { });
                     await page.waitForTimeout(1500 + Math.random() * 1000);
                     await dismissPopups(page);
@@ -288,10 +292,11 @@ async function runEngine(page) {
                     await userField.waitFor({ state: 'visible', timeout: 25000 });
                     logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
 
-                    // 2️⃣ Preencher usuário e senha com .fill() (mais rápido e dispara eventos React/DOM corretamente)
+                    // 2️⃣ Preencher usuário e senha com digitação humanizada
                     await userField.focus();
-                    await userField.fill(IG_USER);
-                    await page.waitForTimeout(500 + Math.random() * 500);
+                    await page.click(USER_SELECTORS);
+                    await page.keyboard.type(IG_USER, { delay: 100 + Math.random() * 50 });
+                    await page.waitForTimeout(800 + Math.random() * 500);
 
                     const PASS_SELECTORS = [
                         'input[name="password"]',
@@ -305,8 +310,9 @@ async function runEngine(page) {
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.focus();
-                    await passField.fill(IG_PASS);
-                    await page.waitForTimeout(800 + Math.random() * 500);
+                    await page.click(PASS_SELECTORS);
+                    await page.keyboard.type(IG_PASS, { delay: 100 + Math.random() * 50 });
+                    await page.waitForTimeout(1000 + Math.random() * 500);
 
                     // 4️⃣ Botão de submit
                     const SUBMIT_SELECTORS = [
@@ -343,8 +349,28 @@ async function runEngine(page) {
                     logger('INFO', 'AUTH', 'Validando carregamento do Inbox...');
                     await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
                     
+                    // Janela de mitigação de Checkpoint (espera até 30s por renderização ou intervenção)
+                    let attempts = 0;
+                    while (attempts < 6) {
+                        const currentUrl = page.url();
+                        if (currentUrl.includes('direct/inbox') || currentUrl.includes('direct/t/')) break;
+
+                        if (currentUrl.includes('challenge') || currentUrl.includes('checkpoint')) {
+                            logger('WARN', 'AUTH', `⚠️ Desafio detectado: ${currentUrl}. Tentando autodismiss...`);
+                            // Tenta clicar em botões de "Fui eu" ou "Confirmar"
+                            const challengeBtns = page.locator('button:has-text("Fui eu"), button:has-text("This was me"), button:has-text("Confirmar"), button:has-text("Confirm")');
+                            if (await challengeBtns.first().isVisible({ timeout: 2000 })) {
+                                await challengeBtns.first().click().catch(() => {});
+                                await page.waitForTimeout(5000);
+                            }
+                        }
+
+                        await page.waitForTimeout(5000);
+                        attempts++;
+                    }
+
                     // Espera por um elemento real do inbox aparecer
-                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6, a[href*="/direct/t/"]').first().isVisible({ timeout: 20000 }).catch(() => false);
+                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6, a[href*="/direct/t/"]').first().isVisible({ timeout: 10000 }).catch(() => false);
                     const hasUserCookie = await page.evaluate(() => document.cookie.includes('ds_user_id'));
 
                     if (inboxLoaded && hasUserCookie) {
@@ -354,7 +380,7 @@ async function runEngine(page) {
                     } else {
                         const currentUrl = page.url();
                         if (currentUrl.includes('login') || currentUrl.includes('accounts')) {
-                            logger('FATAL', 'AUTH', 'Redirecionado para login durante validação.');
+                            logger('FATAL', 'AUTH', 'Sessão bloqueada ou IP rejeitado pela Meta.');
                             throw new Error('LOGIN_REJECTED');
                         }
                         logger('WARN', 'AUTH', 'Inbox não renderizou totalmente, mas tentando seguir...');
