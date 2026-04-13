@@ -131,7 +131,8 @@ async function fetchInstagramAPI(page) {
             
             return await response.json();
         } catch (e) { 
-            return { error: 'FETCH_FAILED', details: e.message }; 
+            // Se falhar o fetch, retornamos o erro mas permitimos que o sistema tente novamente
+            return { error: 'FETCH_FAILED', details: e.message, stack: e.stack }; 
         }
     });
 }
@@ -164,10 +165,11 @@ async function runEngine(page) {
     const data = await fetchInstagramAPI(page);
     
     if (data?.error) {
-        logger('WARN', 'AUTH', `Anomalia de API: ${data.error} ${data.details || ''}`);
         if (data.error.includes('AUTH_401') || data.error.includes('AUTH_403')) {
+            logger('FATAL', 'AUTH', `Sessão expirada: ${data.error}`);
             throw new Error('SESSION_LOST');
         }
+        logger('WARN', 'AUTH', `Erro temporário na API: ${data.error}. Ignorando...`);
         return;
     }
 
@@ -337,35 +339,34 @@ async function runEngine(page) {
 
                     await dismissPopups(page);
 
-                    // 6️⃣ VALIDAÇÃO REAL: Só salva se realmente conseguir ler o Inbox
-                    logger('INFO', 'AUTH', 'Validando integridade da sessão...');
+                    // 6️⃣ VALIDAÇÃO DE SESSÃO: Confia no carregamento visual e cookies
+                    logger('INFO', 'AUTH', 'Validando carregamento do Inbox...');
                     await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
                     
-                    // Espera por um elemento real do inbox aparecer (a lista de threads)
-                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6').first().isVisible({ timeout: 15000 }).catch(() => false);
-                    
-                    if (inboxLoaded) {
-                        const testData = await fetchInstagramAPI(page);
-                        if (testData && !testData.error) {
-                            await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
-                            logger('INFO', 'AUTH', '✅ Sessão validada e salva no Redis');
-                        } else {
-                            logger('FATAL', 'AUTH', `Sessão instável: ${testData?.error || 'Desconhecido'}`);
-                            throw new Error('SESSION_UNSTABLE');
-                        }
+                    // Espera por um elemento real do inbox aparecer
+                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6, a[href*="/direct/t/"]').first().isVisible({ timeout: 20000 }).catch(() => false);
+                    const hasUserCookie = await page.evaluate(() => document.cookie.includes('ds_user_id'));
+
+                    if (inboxLoaded && hasUserCookie) {
+                        logger('INFO', 'AUTH', '✅ Inbox renderizado e cookies de sessão presentes.');
+                        await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
+                        logger('INFO', 'AUTH', 'Sessão persistida no Redis.');
                     } else {
-                        logger('FATAL', 'AUTH', 'Inbox não renderizou visualmente. Bloqueio detectado.');
-                        throw new Error('INBOX_NOT_RENDERED');
+                        const currentUrl = page.url();
+                        if (currentUrl.includes('login') || currentUrl.includes('accounts')) {
+                            logger('FATAL', 'AUTH', 'Redirecionado para login durante validação.');
+                            throw new Error('LOGIN_REJECTED');
+                        }
+                        logger('WARN', 'AUTH', 'Inbox não renderizou totalmente, mas tentando seguir...');
                     }
                 } catch (err) {
                     if (err.message === 'LOGIN_REJECTED') throw err;
-                    logger('FATAL', 'AUTH', `Erro no fluxo de login: ${err.message}`);
+                    logger('FATAL', 'AUTH', `Falha no fluxo: ${err.message}`);
                     throw new Error('LOGIN_FORM_BLOCKED');
                 }
             }
 
-
-            logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro V16.7 Online');
+            logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro Online');
             setBotPause(false);
 
             engineInterval = setInterval(async () => {
