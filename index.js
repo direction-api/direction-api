@@ -245,6 +245,15 @@ async function runEngine(page) {
                     await userField.fill(IG_USER);
                     await page.waitForTimeout(500 + Math.random() * 500);
 
+                    const PASS_SELECTORS = [
+                        'input[name="password"]',
+                        'input[type="password"]',
+                        'input[aria-label*="senha"]',
+                        'input[aria-label*="password"]',
+                        'input[placeholder*="senha"]',
+                        'input[autocomplete="current-password"]'
+                    ].join(', ');
+
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.focus();
