@@ -8,7 +8,8 @@ const dns = require('dns');
 
 dns.setDefaultResultOrder('ipv4first');
 
-const INSTANCE_ID = process.env.INSTANCE_NAME;
+// Configurações
+const INSTANCE_ID = process.env.INSTANCE_NAME || 'instancia_local';
 const IG_USER = process.env.IG_USERNAME;
 const IG_PASS = process.env.IG_PASSWORD;
 const RABBITMQ_URI = process.env.RABBITMQ_URI || 'amqp://localhost';
@@ -17,55 +18,30 @@ const BROWSER_DATA_DIR = './browser_data/session_' + IG_USER;
 
 let amqpChannel = null;
 let redisClient = null;
-
 let isPaused = false;
-let pauseTimeout = null;
 
 function logger(level, module, message) {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}] [${level}] [${module}] ${message}`);
 }
 
-function setBotPause(state) {
-    isPaused = state;
-    if (state) {
-        pauseTimeout = setTimeout(() => {
-            if (isPaused) {
-                isPaused = false;
-                logger('WARN', 'SYSTEM', 'Trava de segurança ativada: isPaused resetado (45s)');
-            }
-        }, 45000);
-    } else {
-        if (pauseTimeout) clearTimeout(pauseTimeout);
+// ⌨️ Helper: Digitação humana real com atraso randômico
+async function humanType(page, selector, text) {
+    await page.waitForSelector(selector, { state: 'visible', timeout: 15000 });
+    await page.focus(selector);
+    for (const char of text) {
+        await page.keyboard.type(char, { delay: Math.random() * 120 + 60 });
     }
 }
 
-function cleanupZombies() {
-    try {
-        if (process.platform === 'win32') {
-            execSync('wmic process where "name=\'chrome.exe\' and commandline like \'%--headless%\'" call terminate', { stdio: 'ignore' });
-        } else {
-            execSync('pkill -f "(chrome|chromium).*--headless"', { stdio: 'ignore' });
-        }
-    } catch (e) { }
-}
-
-async function initializeServices(retries = 15, delay = 3000) {
+async function initializeServices() {
     if (!amqpChannel) {
-        for (let i = 1; i <= retries; i++) {
-            try {
-                const conn = await amqplib.connect(RABBITMQ_URI);
-                amqpChannel = await conn.createChannel();
-                await amqpChannel.assertQueue('mensagens', { durable: true });
-                await amqpChannel.assertQueue('enviar_mensagem', { durable: true });
-                logger('INFO', 'SERVICES', 'RabbitMQ conectado');
-                break;
-            } catch (err) {
-                logger('WARN', 'SERVICES', `RabbitMQ tentativa ${i}/${retries}: ${err.message}`);
-                if (i === retries) throw new Error(`RabbitMQ indisponível após ${retries} tentativas`);
-                await new Promise(r => setTimeout(r, delay));
-            }
-        }
+        try {
+            const conn = await amqplib.connect(RABBITMQ_URI);
+            amqpChannel = await conn.createChannel();
+            await amqpChannel.assertQueue('mensagens', { durable: true });
+            logger('INFO', 'SERVICES', 'RabbitMQ conectado');
+        } catch (e) { logger('ERROR', 'SERVICES', `Rabbit Falhou: ${e.message}`); throw e; }
     }
     if (!redisClient) {
         redisClient = redis.createClient({ url: REDIS_URI });
@@ -74,30 +50,23 @@ async function initializeServices(retries = 15, delay = 3000) {
     }
 }
 
-
-// 🛡️ O "Mata-Popups" da Zennitex (Melhorado para Cookies e Modais)
+// 🛡️ Mata-Popups aprimorado
 async function dismissPopups(page) {
     try {
-        const popupSelectors = [
+        const selectors = [
             'button:has-text("Agora não")',
-            'div[role="button"]:has-text("Agora não")',
+            'button:has-text("Not Now")',
+            'button:has-text("Salvar informações")',
+            'button:has-text("Save info")',
             'button:has-text("Permitir todos os cookies")',
-            'button:has-text("Allow all cookies")',
-            'button:has-text("Decline optional cookies")',
-            'button:has-text("Recusar cookies opcionais")',
             'button:has-text("Aceitar tudo")',
-            'button:has-text("Ajustar configurações")',
-            'button:has-text("Recusar tudo")',
-            'button:has-text("Accept all cookies")',
-            'button:has-text("Decline all cookies")'
+            'div[role="button"]:has-text("Agora não")'
         ];
-
-        for (const selector of popupSelectors) {
-            const btn = page.locator(selector).first();
-            if (await btn.isVisible({ timeout: 1000 })) {
-                await btn.click({ timeout: 2000 }).catch(() => { });
-                logger('INFO', 'SYSTEM', `Popup/Cookie interceptado e fechado: ${selector}`);
-                await page.waitForTimeout(500);
+        for (const s of selectors) {
+            const btn = page.locator(s).first();
+            if (await btn.isVisible({ timeout: 1500 })) {
+                await btn.click().catch(() => { });
+                await page.waitForTimeout(800);
             }
         }
     } catch (e) { }
@@ -109,397 +78,118 @@ async function fetchInstagramAPI(page) {
         try {
             const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1];
             if (!csrf) return { error: 'CSRF_MISSING' };
-
             const response = await fetch('/api/v1/direct_v2/inbox/?persistentBadging=true&folder=0&thread_message_limit=10', {
                 method: 'GET',
-                headers: {
-                    'x-csrftoken': csrf,
-                    'x-ig-app-id': '936619743392459',
-                    'x-requested-with': 'XMLHttpRequest',
-                    'x-asbd-id': '129477',
-                    'x-ig-www-claim': '0',
-                    'sec-ch-prefers-color-scheme': 'dark',
-                    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                    'sec-ch-ua-mobile': '?0',
-                    'sec-ch-ua-platform': '"Windows"'
-                }
+                headers: { 'x-csrftoken': csrf, 'x-ig-app-id': '936619743392459', 'x-requested-with': 'XMLHttpRequest' }
             });
-
-            if (response.status === 401 || response.status === 403) {
-                return { error: `AUTH_${response.status}` };
-            }
             if (!response.ok) return { error: `HTTP_${response.status}` };
-            
             return await response.json();
-        } catch (e) { 
-            // Se falhar o fetch, retornamos o erro mas permitimos que o sistema tente novamente
-            return { error: 'FETCH_FAILED', details: e.message, stack: e.stack }; 
-        }
+        } catch (e) { return { error: 'FETCH_FAILED' }; }
     });
 }
 
-async function runEngine(page) {
-    if (isPaused) return;
-
-    const currentUrl = page.url();
-    if (!currentUrl.includes('direct/inbox') && !currentUrl.includes('direct/t/')) {
-        // Se cair em uma tela de "checkpoint" ou "challenge", não mata a sessão de imediato, espera aprovação
-        if (currentUrl.includes('challenge') || currentUrl.includes('checkpoint')) {
-            logger('WARN', 'CORE', `⚠️  Interrupção na Meta detectada (Challenge). URL: ${currentUrl}`);
-            return; 
-        }
-
-        logger('WARN', 'CORE', `Redirecionado para: ${currentUrl}. Tentando voltar ao inbox...`);
-        await dismissPopups(page);
-        await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-        await page.waitForTimeout(5000);
-
-        if (!page.url().includes('direct/inbox')) {
-            // Se tentamos voltar e ele jogou pro login de novo, aí sim a sessão morreu
-            if (page.url().includes('login') || page.url().includes('accounts')) {
-                throw new Error('SESSION_LOST');
-            }
-        }
-        return;
-    }
-
-    const data = await fetchInstagramAPI(page);
-    
-    if (data?.error) {
-        if (data.error.includes('AUTH_401') || data.error.includes('AUTH_403')) {
-            logger('FATAL', 'AUTH', `Sessão expirada: ${data.error}`);
-            throw new Error('SESSION_LOST');
-        }
-        logger('WARN', 'AUTH', `Erro temporário na API: ${data.error}. Ignorando...`);
-        return;
-    }
-
-    if (!data?.inbox?.threads) return;
-
-    const myUserId = await page.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
-
-    for (const thread of data.inbox.threads) {
-        const otherUser = thread.users.find(u => String(u.pk) !== String(myUserId));
-        if (!otherUser) continue;
-
-        const threadIdStr = String(thread.thread_id);
-
-        for (const item of thread.items) {
-            if (String(item.user_id) !== String(myUserId) && (item.item_type === 'text' || item.item_type === 'link')) {
-                const msgId = item.item_id;
-                const isProcessed = await redisClient.get(`seen:${INSTANCE_ID}:${msgId}`);
-
-                if (!isProcessed) {
-                    const text = item.item_type === 'text' ? item.text : item.link.text;
-                    const cleanPayload = {
-                        metadata: { event: 'MESSAGES_UPSERT', instanceId: INSTANCE_ID },
-                        sender: { username: otherUser.username, threadId: threadIdStr },
-                        message: { id: msgId, text: text }
-                    };
-
-                    amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(cleanPayload)), {
-                        persistent: true,
-                        contentType: 'application/json'
-                    });
-
-                    await redisClient.set(`seen:${INSTANCE_ID}:${msgId}`, '1', { EX: 86400 });
-                    logger('INFO', 'INBOUND', `Mensagem capturada: @${otherUser.username}`);
-                }
-            }
-        }
-    }
-}
-
 (async () => {
-    cleanupZombies();
     while (true) {
-        let browser = null;
-        let engineInterval = null;
-
+        let context = null;
         try {
             await initializeServices();
 
-            // 🛡️ PERSISTENT CONTEXT: Simula um navegador instalado de verdade (Muito mais estável)
-            const context = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
-                headless: true,
+            // Lançamento com Persistência
+            context = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
+                headless: false, // 💡 MUDADO PARA FALSE: Ver o navegador ajuda a debugar localmente!
                 args: [
-                    '--no-sandbox', 
-                    '--disable-setuid-sandbox',
+                    '--no-sandbox',
                     '--disable-blink-features=AutomationControlled',
-                    '--disable-infobars',
-                    '--window-position=0,0',
-                    '--window-size=1366,768'
+                    '--window-size=1280,720'
                 ],
-                viewport: { width: 1366, height: 768 },
-                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                locale: 'pt-BR',
-                timezoneId: 'America/Sao_Paulo'
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
             });
 
-            // 🕵️ EXTRA STEALTH: Esconde rastros de automação e mimetiza hardware
-            await context.addInitScript(() => {
-                // Remove rastro do WebDriver
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                
-                // Mimetiza placa de vídeo (WebGL)
-                const getParameter = WebGLRenderingContext.prototype.getParameter;
-                WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Intel Open Source Technology Center';
-                    if (parameter === 37446) return 'Mesa DRI Intel(R) HD Graphics 520 (Skylake GT2)';
-                    return getParameter.apply(this, arguments);
-                };
+            const page = context.pages()[0] || await context.newPage();
 
-                // Mimetiza plugins e linguagens
-                Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
-
-                window.chrome = { runtime: {} };
-            });
-
-            const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-
-            logger('INFO', 'AUTH', 'Acessando o Instagram com Perfil Persistente...');
-            await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' });
+            logger('INFO', 'AUTH', 'Navegando para o Inbox...');
+            await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' });
             await page.waitForTimeout(3000);
+
+            // Fluxo de Login se necessário
+            if (page.url().includes('login') || page.url().includes('accounts')) {
+                logger('WARN', 'AUTH', 'Login detectado como necessário.');
+
+                await dismissPopups(page); // Cookies costumam aparecer aqui
+
+                const userSel = 'input[name="username"]';
+                const passSel = 'input[name="password"]';
+
+                await humanType(page, userSel, IG_USER);
+                await page.waitForTimeout(1000);
+                await humanType(page, passSel, IG_PASS);
+
+                await page.waitForTimeout(1000);
+                await page.click('button[type="submit"]');
+                logger('INFO', 'AUTH', 'Aguardando autenticação...');
+
+                // Espera o redirecionamento ou erro
+                await page.waitForFunction(() => {
+                    return !document.URL.includes('login') || document.body.innerText.includes('Incorreta');
+                }, { timeout: 30000 });
+
+                if (page.url().includes('login') && await page.content().then(c => c.includes('Incorreta'))) {
+                    throw new Error('SENHA_INCORRETA');
+                }
+            }
+
+            // Pós-login: Limpeza de terreno
+            await page.waitForTimeout(5000);
             await dismissPopups(page);
 
-            // Se o contexto persistente não estiver logado, fazemos o login
-            if (page.url().includes('login') || page.url().includes('accounts')) {
-                logger('WARN', 'AUTH', 'Sessão não encontrada no perfil. Iniciando login...');
+            // Validação final de URL
+            if (!page.url().includes('direct/inbox')) {
+                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' });
+            }
 
-                try {
-                    await dismissPopups(page);
-                    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => { });
-                    await page.waitForTimeout(1500 + Math.random() * 1000);
-                    await dismissPopups(page);
+            logger('INFO', 'SYSTEM', '🚀 Direction API Online e Monitorando!');
 
-                    // 1️⃣ Seletores baseados no Print do usuário (PT-BR) e Fallbacks (EN)
-                    const USER_SELECTORS = [
-                        'input[aria-label*="Número de celular"]',
-                        'input[aria-label*="Phone number"]',
-                        'input[name="username"]',
-                        'input[name="email"]',
-                        'input[autocomplete="username"]'
-                    ].join(', ');
+            // Engine Loop
+            while (true) {
+                const data = await fetchInstagramAPI(page);
 
-                    const PASS_SELECTORS = [
-                        'input[aria-label*="Senha"]',
-                        'input[aria-label*="Password"]',
-                        'input[name="password"]',
-                        'input[type="password"]',
-                        'input[autocomplete="current-password"]'
-                    ].join(', ');
+                if (data?.inbox?.threads) {
+                    const myUserId = await page.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
 
-                    const userField = page.locator(USER_SELECTORS).first();
-                    await userField.waitFor({ state: 'visible', timeout: 25000 });
-                    logger('INFO', 'AUTH', 'Formulário detectado. Iniciando injeção agressiva...');
+                    for (const thread of data.inbox.threads) {
+                        const otherUser = thread.users.find(u => String(u.pk) !== String(myUserId));
+                        if (!otherUser) continue;
 
-                    // 🛡️ INJEÇÃO DE FORÇA BRUTA: Foca, Preenche e dispara Eventos DOM (React Safe)
-                    await userField.scrollIntoViewIfNeeded();
-                    await userField.focus();
-                    await userField.fill(IG_USER);
-                    await page.evaluate((sel, val) => {
-                        const el = document.querySelector(sel);
-                        if (el) {
-                            el.value = val;
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        }
-                    }, USER_SELECTORS, IG_USER);
-                    
-                    await page.waitForTimeout(500 + Math.random() * 500);
+                        for (const item of thread.items) {
+                            if (String(item.user_id) !== String(myUserId) && item.item_type === 'text') {
+                                const msgId = item.item_id;
+                                const seen = await redisClient.get(`seen:${INSTANCE_ID}:${msgId}`);
 
-                    const passField = page.locator(PASS_SELECTORS).first();
-                    await passField.waitFor({ state: 'visible', timeout: 10000 });
-                    await passField.focus();
-                    await passField.fill(IG_PASS);
-                    await page.evaluate((sel, val) => {
-                        const el = document.querySelector(sel);
-                        if (el) {
-                            el.value = val;
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                        }
-                    }, PASS_SELECTORS, IG_PASS);
-
-                    await page.waitForTimeout(1000 + Math.random() * 500);
-
-                    // 🛡️ VALIDAÇÃO PRÉ-SUBMIT: Garante que os campos não estão vazios
-                    const checkUser = await userField.inputValue();
-                    const checkPass = await passField.inputValue();
-                    if (!checkUser || !checkPass) {
-                        logger('WARN', 'AUTH', 'Campos continuam vazios após injeção. Tentando teclado físico...');
-                        await userField.focus();
-                        await page.keyboard.press('Control+A');
-                        await page.keyboard.press('Backspace');
-                        await page.keyboard.type(IG_USER, { delay: 100 });
-                    }
-
-                    // 4️⃣ Botão de submit
-                    const SUBMIT_SELECTORS = [
-                        'button[type="submit"]',
-                        'button:has-text("Entrar")',
-                        'div[role="button"]:has-text("Entrar")',
-                        'button:has-text("Log in")',
-                        'button:has-text("Log In")',
-                        '[data-testid="royal_login_button"]',
-                        'div[role="button"]:has-text("Log in")'
-                    ].join(', ');
-
-                    const submitBtn = page.locator(SUBMIT_SELECTORS).first();
-                    try {
-                        await submitBtn.waitFor({ state: 'visible', timeout: 15000 });
-                        await submitBtn.click({ force: true });
-                        logger('INFO', 'AUTH', 'Botão de login clicado.');
-                    } catch (e) {
-                        logger('WARN', 'AUTH', 'Botão de login não encontrado ou invisível. Tentando Enter...');
-                        await page.keyboard.press('Enter');
-                    }
-
-                    // 5️⃣ Aguardar transição e tela de "Salvar informações"
-                    await page.waitForTimeout(10000);
-                    const saveInfoBtn = page.locator('button:has-text("Salvar informações"), button:has-text("Save info"), button:has-text("Agora não"), button:has-text("Not Now")').first();
-                    if (await saveInfoBtn.isVisible({ timeout: 5000 })) {
-                        await saveInfoBtn.click().catch(() => {});
-                        await page.waitForTimeout(3000);
-                    }
-
-                    await dismissPopups(page);
-
-                    // 6️⃣ VALIDAÇÃO DE SESSÃO: Confia no carregamento visual e cookies
-                    logger('INFO', 'AUTH', 'Validando carregamento do Inbox...');
-                    await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
-                    
-                    // Janela de mitigação de Checkpoint (espera até 30s por renderização ou intervenção)
-                    let attempts = 0;
-                    while (attempts < 6) {
-                        const currentUrl = page.url();
-                        const cookies = await page.context().cookies();
-                        const hasSession = cookies.some(c => c.name === 'sessionid');
-                        const hasUser = cookies.some(c => c.name === 'ds_user_id');
-
-                        if (hasSession && hasUser) {
-                            logger('INFO', 'AUTH', '✅ Prova Real encontrada: Cookies de sessão ativos.');
-                            break; 
-                        }
-
-                        if (currentUrl.includes('direct/inbox') || currentUrl.includes('direct/t/')) break;
-
-                        if (currentUrl.includes('challenge') || currentUrl.includes('checkpoint')) {
-                            logger('WARN', 'AUTH', `⚠️ Desafio detectado: ${currentUrl}.`);
-                            const challengeBtns = page.locator('button:has-text("Fui eu"), button:has-text("This was me"), button:has-text("Confirmar")');
-                            if (await challengeBtns.first().isVisible({ timeout: 2000 })) {
-                                await challengeBtns.first().click().catch(() => {});
-                                await page.waitForTimeout(5000);
+                                if (!seen) {
+                                    const payload = {
+                                        metadata: { instanceId: INSTANCE_ID },
+                                        sender: { username: otherUser.username, threadId: thread.thread_id },
+                                        message: { text: item.text }
+                                    };
+                                    amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
+                                    await redisClient.set(`seen:${INSTANCE_ID}:${msgId}`, '1', { EX: 86400 });
+                                    logger('INFO', 'INBOUND', `Mensagem de @${otherUser.username} capturada.`);
+                                }
                             }
                         }
-
-                        await page.waitForTimeout(5000);
-                        attempts++;
                     }
-
-                    // Prova Final
-                    const finalCookies = await page.context().cookies();
-                    const isSuccess = finalCookies.some(c => c.name === 'sessionid');
-
-                    if (isSuccess) {
-                        logger('INFO', 'AUTH', '✅ Sucesso absoluto confirmado.');
-                        await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
-                    } else {
-                        const currentUrl = page.url();
-                        // Diagnóstico por texto na tela
-                        const pageText = await page.evaluate(() => document.body.innerText.slice(0, 500).replace(/\n/g, ' '));
-                        logger('FATAL', 'AUTH', `Login falhou. URL: ${currentUrl} | Texto na tela: ${pageText}`);
-                        throw new Error('LOGIN_REJECTED');
-                    }
-                } catch (err) {
-                    if (err.message === 'LOGIN_REJECTED') throw err;
-                    logger('FATAL', 'AUTH', `Falha no fluxo: ${err.message}`);
-                    throw new Error('LOGIN_FORM_BLOCKED');
                 }
+
+                await page.waitForTimeout(5000); // Poll de 5 segundos
+                if (page.url().includes('login')) throw new Error('SESSION_LOST');
             }
-
-            logger('INFO', 'SYSTEM', 'Zennitex Gateway Pro Online');
-            setBotPause(false);
-
-            engineInterval = setInterval(async () => {
-                try {
-                    await runEngine(page);
-                } catch (e) {
-                    if (e.message === 'SESSION_LOST' || String(e.message).includes('SESSION_LOST')) {
-                        logger('FATAL', 'CORE', 'Sessão irrecuperável identificada.');
-                        logger('INFO', 'AUTH', 'Purgando cookie envenenado AGORA...');
-
-                        redisClient.del(`ai_session:${IG_USER}`).then(async () => {
-                            clearInterval(engineInterval);
-                            if (browser) await browser.close();
-                            logger('INFO', 'CORE', 'Cookie destruído. Matando processo para o server.js reiniciar limpo...');
-                            process.exit(1);
-                        }).catch(() => {
-                            process.exit(1);
-                        });
-                    }
-                }
-            }, 3000);
-
-            // 2. MOTOR DE ENVIO (OUTBOUND)
-            amqpChannel.consume('enviar_mensagem', async (msg) => {
-                if (!msg) return;
-                setBotPause(true);
-
-                const { threadId, text } = JSON.parse(msg.content.toString());
-                const cleanThreadId = String(threadId).trim();
-
-                try {
-                    logger('INFO', 'OUTBOUND', `Navegando para conversa: ${cleanThreadId}`);
-                    await page.goto(`https://www.instagram.com/direct/t/${cleanThreadId}/`, { waitUntil: 'domcontentloaded' });
-                    await page.waitForTimeout(1500);
-
-                    await dismissPopups(page);
-
-                    const textBox = page.locator('div[role="textbox"][contenteditable="true"], textarea').first();
-                    await textBox.waitFor({ state: 'visible', timeout: 15000 });
-
-                    // 🛡️ SOLUÇÃO DEFINITIVA: Injeção direta de Foco
-                    await textBox.evaluate(node => node.focus());
-                    await page.waitForTimeout(200);
-
-                    await page.keyboard.type(text, { delay: 50 });
-
-                    // 🛡️ PAUSA CRÍTICA: Dá tempo do Lexical Editor armar o botão de enviar
-                    await page.waitForTimeout(500);
-
-                    await page.keyboard.press('Enter');
-
-                    await page.waitForTimeout(1500);
-                    logger('INFO', 'OUTBOUND', '✅ Mensagem enviada com sucesso');
-                    amqpChannel.ack(msg);
-                } catch (e) {
-                    logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
-                    amqpChannel.nack(msg, false, false);
-                } finally {
-                    try { await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }); } catch (err) { }
-                    setBotPause(false);
-                }
-            });
-
-            await new Promise(() => { });
 
         } catch (e) {
-            const isLoginError = e.message === 'LOGIN_FORM_BLOCKED' || e.message === 'LOGIN_REJECTED';
-            if (e.message !== 'SESSION_LOST' && !String(e.message).includes('SESSION_LOST')) {
-                logger('ERROR', 'CORE', `Crash Detectado: ${e.message}`);
-            }
-            if (engineInterval) clearInterval(engineInterval);
-            if (browser) await browser.close();
-            setBotPause(false);
-
-            // Backoff maior para erros de login (evita banimento por tentativas em loop)
-            const rebootDelay = isLoginError ? 120000 : 5000;
-            logger('INFO', 'CORE', `Reboot do motor em ${rebootDelay / 1000}s...`);
-            await new Promise(r => setTimeout(r, rebootDelay));
+            logger('ERROR', 'CORE', `Crash: ${e.message}`);
+            if (context) await context.close();
+            const delay = e.message.includes('SENHA') ? 300000 : 60000;
+            logger('INFO', 'CORE', `Reiniciando em ${delay / 1000}s...`);
+            await new Promise(r => setTimeout(r, delay));
         }
     }
 })();
