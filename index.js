@@ -74,14 +74,27 @@ async function initializeServices(retries = 15, delay = 3000) {
 }
 
 
-// 🛡️ O "Mata-Popups" da Zennitex
+// 🛡️ O "Mata-Popups" da Zennitex (Melhorado para Cookies e Modais)
 async function dismissPopups(page) {
     try {
-        const popupBtn = page.locator('button:has-text("Agora não"), div[role="button"]:has-text("Agora não")').first();
-        if (await popupBtn.isVisible({ timeout: 1500 })) {
-            await popupBtn.click();
-            logger('INFO', 'SYSTEM', 'Popup interceptado e fechado (Agora não).');
-            await page.waitForTimeout(500);
+        const popupSelectors = [
+            'button:has-text("Agora não")',
+            'div[role="button"]:has-text("Agora não")',
+            'button:has-text("Permitir todos os cookies")',
+            'button:has-text("Allow all cookies")',
+            'button:has-text("Decline optional cookies")',
+            'button:has-text("Recusar cookies opcionais")',
+            'button:has-text("Aceitar tudo")',
+            'button:has-text("Ajustar configurações")'
+        ];
+
+        for (const selector of popupSelectors) {
+            const btn = page.locator(selector).first();
+            if (await btn.isVisible({ timeout: 1000 })) {
+                await btn.click({ timeout: 2000 }).catch(() => {});
+                logger('INFO', 'SYSTEM', `Popup/Cookie interceptado e fechado: ${selector}`);
+                await page.waitForTimeout(500);
+            }
         }
     } catch (e) { }
 }
@@ -208,12 +221,14 @@ async function runEngine(page) {
                     // 1️⃣ Campo de usuário — múltiplos seletores para cobrir EN e PT-BR
                     const USER_SELECTORS = [
                         'input[name="username"]',
+                        'input[name="email"]', // Adicionado conforme log
                         'input[aria-label*="usuário"]',
                         'input[aria-label*="username"]',
                         'input[aria-label*="celular"]',
                         'input[aria-label*="email"]',
                         'input[placeholder*="usuário"]',
                         'input[placeholder*="celular"]',
+                        'input[placeholder*="email"]',
                         'input[autocomplete="username"]',
                         'input[type="text"]'   // último recurso
                     ].join(', ');
@@ -223,7 +238,9 @@ async function runEngine(page) {
                     logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
 
                     // 2️⃣ Preencher usuário com delays humanizados
-                    await userField.click({ delay: 80 });
+                    // Usamos force: true para ignorar overlays invisíveis que bloqueiam o clique
+                    await userField.focus(); 
+                    await userField.click({ delay: 80, force: true }); 
                     await page.waitForTimeout(400 + Math.random() * 400);
                     await userField.fill('');
                     for (const char of IG_USER) {
@@ -244,7 +261,8 @@ async function runEngine(page) {
 
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
-                    await passField.click({ delay: 80 });
+                    await passField.focus();
+                    await passField.click({ delay: 80, force: true });
                     await page.waitForTimeout(400 + Math.random() * 400);
                     await passField.fill('');
                     for (const char of IG_PASS) {
