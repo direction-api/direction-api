@@ -166,11 +166,21 @@ app.post('/api/instances/:token/disconnect', async (req, res) => {
 });
 
 // 🚀 ROTA DE ENVIO DIRETA (SINCRONIZADA COM A INSTÂNCIA CORRETA)
+// 🚀 ROTA DE ENVIO DIRETA (BLINDADA CONTRA REQUISIÇÕES VAZIAS)
 app.post('/api/send/:token', async (req, res) => {
     const { token } = req.params;
-    const { threadId, text } = req.body;
 
-    if (!threadId || !text) return res.status(400).json({ success: false, error: 'threadId e text são obrigatórios.' });
+    // 🛡️ BLINDAGEM: Se o n8n mandar sem Content-Type ou vazio, evita o crash
+    const body = req.body || {};
+    const { threadId, text } = body;
+
+    if (!threadId || !text) {
+        console.error(`[API SEND ERROR] Requisição inválida do n8n. Body recebido:`, req.body);
+        return res.status(400).json({
+            success: false,
+            error: 'threadId e text são obrigatórios. Verifique se o n8n está enviando JSON válido com Content-Type: application/json.'
+        });
+    }
 
     try {
         const conn = await amqplib.connect(RABBITMQ_URI);
