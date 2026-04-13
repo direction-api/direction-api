@@ -57,11 +57,9 @@ git clone https://github.com/directionapi/direction-api.git
 cd direction-api
 ```
 
-### 2. Configure as variáveis de ambiente
-```bash
-cp .env.example .env
-nano .env   # ou use seu editor preferido
-```
+### 2. Configure as variáveis (Opcional)
+Se desejar personalizar as senhas, edite o arquivo `docker-compose.yml` ou crie um `.env`. 
+As senhas padrão de fábrica são: `admin`.
 
 Edite o `.env` e defina:
 ```env

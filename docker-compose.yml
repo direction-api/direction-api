@@ -1,32 +1,22 @@
 # ============================================================
-# Direction API — Docker Compose de Produção
-#
-# COMO USAR:
-#   1. cp .env.example .env
-#   2. Edite o .env com suas senhas e configurações
-#   3. docker compose up -d
+# Direction API — Docker Compose de Produção (Hardcoded)
+# Senha Padrão: zennitex2026
 # ============================================================
 
 services:
-
-  # ----------------------------------------------------------
   # 🚀 Direction API — Aplicação Principal
-  # ----------------------------------------------------------
   direction-api:
-    image: ghcr.io/directionapi/direction-api:latest
-    # Para build local: descomente as 2 linhas abaixo e comente a linha "image"
-    # build:
-    #   context: .
+    image: ghcr.io/direction-api/direction-api:latest
     container_name: direction-api
     restart: always
     ports:
       - "3000:3000"
     environment:
-      GLOBAL_API_KEY: ${GLOBAL_API_KEY}
-      POSTGRES_URI:   ${POSTGRES_URI}
-      RABBITMQ_URI:   ${RABBITMQ_URI}
-      REDIS_URI:      ${REDIS_URI}
-      WEBHOOK_URL:    ${WEBHOOK_URL}
+      - GLOBAL_API_KEY=admin
+      - POSTGRES_URI=postgres://postgres:admin@direction-postgres:5432/direction_db
+      - RABBITMQ_URI=amqp://admin:admin@direction-rabbitmq:5672
+      - REDIS_URI=redis://direction-redis:6379
+      - WEBHOOK_URL=https://seu-webhook.com/instagram
     depends_on:
       direction-postgres:
         condition: service_healthy
@@ -37,53 +27,48 @@ services:
     networks:
       - direction-network
 
-  # ----------------------------------------------------------
-  # 🐘 PostgreSQL — Banco de Dados
-  # ----------------------------------------------------------
+  # 🐘 PostgreSQL — Banco de Dados com Auto-Init
   direction-postgres:
     image: postgres:15-alpine
     container_name: direction-postgres
     restart: always
     environment:
-      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB:       ${POSTGRES_DB:-direction_db}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=direction_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # O arquivo init.sql deve estar na mesma pasta para criar as tabelas
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - direction-network
 
-  # ----------------------------------------------------------
   # 🐇 RabbitMQ — Fila de Mensagens
-  # ----------------------------------------------------------
   direction-rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: direction-rabbitmq
     restart: always
     ports:
-      - "15672:15672"   # Painel de administração (opcional, pode remover)
+      - "15672:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
       interval: 15s
       timeout: 10s
       retries: 5
     networks:
       - direction-network
 
-  # ----------------------------------------------------------
-  # 🟥 Redis — Cache de Sessões Instagram
-  # ----------------------------------------------------------
+  # 🟥 Redis — Cache de Sessões
   direction-redis:
     image: redis:7-alpine
     container_name: direction-redis
@@ -91,7 +76,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 5
