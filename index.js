@@ -8,7 +8,6 @@ const path = require('path');
 
 let amqpChannel = null;
 let redisClient = null;
-let isPaused = false;
 let browserPage = null;
 
 const IG_USER = process.env.IG_USERNAME;
@@ -33,7 +32,7 @@ async function initializeServices() {
             redisClient = redis.createClient({ url: REDIS_URI });
             await redisClient.connect();
 
-            logger('INFO', 'SERVICES', `Serviços online. Ouvindo fila: ${mySendQueue}`);
+            logger('INFO', 'SERVICES', `Serviços online. Prontos para operar.`);
             return;
         } catch (e) {
             logger('WARN', 'SERVICES', `Aguardando infraestrutura... (Tentativa ${i + 1}/15)`);
@@ -71,7 +70,6 @@ async function performLogin(page) {
 }
 
 async function fetchInstagramAPI(page) {
-    if (isPaused) return null;
     return await page.evaluate(async () => {
         try {
             const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1];
@@ -116,92 +114,84 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // 📬 MOTOR DE ENVIO - ANTI LEXICAL EDITOR
-            amqpChannel.consume(`enviar_mensagem_${INSTANCE_ID}`, async (msg) => {
-                if (!msg) return;
-                isPaused = true;
-                const { threadId, text } = JSON.parse(msg.content.toString());
+            // MOTOR SÍNCRONO: Loop infinito limpo e em sequência.
+            while (true) {
+                if (browserPage.isClosed()) throw new Error('Navegador fechado inesperadamente');
 
-                try {
-                    await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
+                // 1. OUTBOUND (PULL MODO - Lê apenas 1 mensagem por vez, se houver)
+                const mySendQueue = `enviar_mensagem_${INSTANCE_ID}`;
+                const msg = await amqpChannel.get(mySendQueue, { noAck: false });
 
-                    // 1. Respiro vital para o React do Instagram montar o chat e o Lexical Editor
-                    await browserPage.waitForTimeout(3000);
+                if (msg) {
+                    const { threadId, text } = JSON.parse(msg.content.toString());
+                    try {
+                        logger('INFO', 'OUTBOUND', `Iniciando envio para ${threadId}...`);
+                        await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
 
-                    // 2. Localiza a caixa de texto EXATA do Lexical
-                    const box = browserPage.locator('div[role="textbox"][data-lexical-editor="true"]').first();
-                    await box.waitFor({ state: 'visible', timeout: 15000 });
+                        await browserPage.waitForTimeout(3000); // Respiro pro React montar
 
-                    // 3. Clique real para roubar o foco da página
-                    await box.click();
-                    await browserPage.waitForTimeout(500);
+                        const box = browserPage.locator('div[role="textbox"][data-lexical-editor="true"]').first();
+                        await box.waitFor({ state: 'visible', timeout: 15000 });
 
-                    // 4. Digitação humana (Gatilho obrigatório para o botão "Enviar" aparecer)
-                    // Delay de 80ms simula um humano rápido, mas suficiente pro React processar as letras
-                    await browserPage.keyboard.type(text, { delay: 80 });
+                        await box.click();
+                        await browserPage.waitForTimeout(500);
 
-                    // 5. Espera o React habilitar a interface
-                    await browserPage.waitForTimeout(1500);
+                        await browserPage.keyboard.type(text, { delay: 80 });
+                        await browserPage.waitForTimeout(1500);
 
-                    // 6. Tenta enviar via "Enter" no teclado
-                    await browserPage.keyboard.press('Enter');
+                        await browserPage.keyboard.press('Enter');
+                        await browserPage.waitForTimeout(1000);
 
-                    // 7. Espera para ver se o Enter foi suficiente
-                    await browserPage.waitForTimeout(1000);
+                        const btnSend = browserPage.locator('text="Enviar", text="Send"').last();
+                        if (await btnSend.isVisible({ timeout: 1500 }).catch(() => false)) {
+                            await btnSend.click({ force: true });
+                        }
 
-                    // 8. FALLBACK MATADOR: Procura a palavra "Enviar" ou "Send" na tela inteira e clica
-                    const btnSend = browserPage.locator('text="Enviar", text="Send"').last();
-                    if (await btnSend.isVisible({ timeout: 1500 }).catch(() => false)) {
-                        await btnSend.click({ force: true });
-                        logger('INFO', 'OUTBOUND', 'Botão clicado manualmente no fallback.');
+                        await browserPage.waitForTimeout(3000); // Garante que saiu do seu servidor
+
+                        amqpChannel.ack(msg);
+                        logger('INFO', 'OUTBOUND', `✅ Mensagem enviada com sucesso para ${threadId}`);
+                    } catch (e) {
+                        logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
+                        amqpChannel.nack(msg, false, true); // Devolve pra fila se falhar
                     }
 
-                    // 9. Trava final de 3 segundos para garantir que o POST de rede do Instagram vá pro servidor
-                    await browserPage.waitForTimeout(3000);
-
-                    amqpChannel.ack(msg);
-                    logger('INFO', 'OUTBOUND', `✅ Mensagem enviada para a thread ${threadId}`);
-                } catch (e) {
-                    logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
-                    amqpChannel.nack(msg, false, true);
-                } finally {
-                    isPaused = false;
+                    // Voltar pro inbox de forma segura antes de ler mensagens novas
                     await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { });
                 }
-            });
 
-            // 📨 MOTOR DE RECEBIMENTO
-            while (true) {
-                if (!isPaused) {
-                    const data = await fetchInstagramAPI(browserPage);
-                    if (data?.inbox?.threads) {
-                        const myUserId = await browserPage.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
+                // 2. INBOUND (Ler mensagens novas)
+                const data = await fetchInstagramAPI(browserPage);
+                if (data?.inbox?.threads) {
+                    const myUserId = await browserPage.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
 
-                        for (const thread of data.inbox.threads) {
-                            for (const item of thread.items) {
-                                if (item.item_type === 'text' && String(item.user_id) !== String(myUserId)) {
-                                    const seen = await redisClient.get(`seen:${INSTANCE_ID}:${item.item_id}`);
-                                    if (!seen) {
-                                        const senderObj = thread.users.find(u => String(u.pk) === String(item.user_id));
-                                        const realUsername = senderObj ? senderObj.username : 'desconhecido';
+                    for (const thread of data.inbox.threads) {
+                        for (const item of thread.items) {
+                            if (item.item_type === 'text' && String(item.user_id) !== String(myUserId)) {
+                                const seen = await redisClient.get(`seen:${INSTANCE_ID}:${item.item_id}`);
+                                if (!seen) {
+                                    const senderObj = thread.users.find(u => String(u.pk) === String(item.user_id));
+                                    const realUsername = senderObj ? senderObj.username : 'desconhecido';
 
-                                        const payload = {
-                                            metadata: { instanceId: INSTANCE_ID },
-                                            sender: { username: realUsername, threadId: thread.thread_id },
-                                            message: { id: item.item_id, text: item.text }
-                                        };
+                                    const payload = {
+                                        metadata: { instanceId: INSTANCE_ID },
+                                        sender: { username: realUsername, threadId: thread.thread_id },
+                                        message: { id: item.item_id, text: item.text }
+                                    };
 
-                                        amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
-                                        await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
-                                        logger('INFO', 'INBOUND', `📩 Nova mensagem de @${realUsername}`);
-                                    }
+                                    amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
+                                    await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
+                                    logger('INFO', 'INBOUND', `📩 Nova mensagem de @${realUsername}`);
                                 }
                             }
                         }
                     }
                 }
 
-                await browserPage.waitForTimeout(5000);
+                // 3. RESPIRAR (Pausa antes do próximo ciclo)
+                await browserPage.waitForTimeout(4000);
+
+                // 4. CHECAGEM DE SEGURANÇA
                 if (browserPage.url().includes('login')) throw new Error('SESSION_LOST');
             }
 
