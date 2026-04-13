@@ -273,48 +273,69 @@ async function runEngine(page) {
                     await page.waitForTimeout(1500 + Math.random() * 1000);
                     await dismissPopups(page);
 
-                    // 1️⃣ Campo de usuário — múltiplos seletores para cobrir EN e PT-BR
+                    // 1️⃣ Seletores baseados no Print do usuário (PT-BR) e Fallbacks (EN)
                     const USER_SELECTORS = [
+                        'input[aria-label*="Número de celular"]',
+                        'input[aria-label*="Phone number"]',
                         'input[name="username"]',
-                        'input[name="email"]', // Adicionado conforme log
-                        'input[aria-label*="usuário"]',
-                        'input[aria-label*="username"]',
-                        'input[aria-label*="celular"]',
-                        'input[aria-label*="email"]',
-                        'input[placeholder*="usuário"]',
-                        'input[placeholder*="celular"]',
-                        'input[placeholder*="email"]',
-                        'input[autocomplete="username"]',
-                        'input[type="text"]'   // último recurso
+                        'input[name="email"]',
+                        'input[autocomplete="username"]'
+                    ].join(', ');
+
+                    const PASS_SELECTORS = [
+                        'input[aria-label*="Senha"]',
+                        'input[aria-label*="Password"]',
+                        'input[name="password"]',
+                        'input[type="password"]',
+                        'input[autocomplete="current-password"]'
                     ].join(', ');
 
                     const userField = page.locator(USER_SELECTORS).first();
                     await userField.waitFor({ state: 'visible', timeout: 25000 });
-                    logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
+                    logger('INFO', 'AUTH', 'Formulário detectado. Iniciando injeção agressiva...');
 
-                    // 2️⃣ Preencher usuário e senha com digitação humanizada
+                    // 🛡️ INJEÇÃO DE FORÇA BRUTA: Foca, Preenche e dispara Eventos DOM (React Safe)
+                    await userField.scrollIntoViewIfNeeded();
                     await userField.focus();
-                    await page.mouse.move(100 + Math.random() * 200, 100 + Math.random() * 200);
-                    await page.click(USER_SELECTORS);
-                    await page.keyboard.type(IG_USER, { delay: 100 + Math.random() * 50 });
-                    await page.waitForTimeout(800 + Math.random() * 500);
-
-                    const PASS_SELECTORS = [
-                        'input[name="password"]',
-                        'input[type="password"]',
-                        'input[aria-label*="senha"]',
-                        'input[aria-label*="password"]',
-                        'input[placeholder*="senha"]',
-                        'input[autocomplete="current-password"]'
-                    ].join(', ');
+                    await userField.fill(IG_USER);
+                    await page.evaluate((sel, val) => {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }
+                    }, USER_SELECTORS, IG_USER);
+                    
+                    await page.waitForTimeout(500 + Math.random() * 500);
 
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.focus();
-                    await page.mouse.move(200 + Math.random() * 200, 200 + Math.random() * 200);
-                    await page.click(PASS_SELECTORS);
-                    await page.keyboard.type(IG_PASS, { delay: 100 + Math.random() * 50 });
+                    await passField.fill(IG_PASS);
+                    await page.evaluate((sel, val) => {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }
+                    }, PASS_SELECTORS, IG_PASS);
+
                     await page.waitForTimeout(1000 + Math.random() * 500);
+
+                    // 🛡️ VALIDAÇÃO PRÉ-SUBMIT: Garante que os campos não estão vazios
+                    const checkUser = await userField.inputValue();
+                    const checkPass = await passField.inputValue();
+                    if (!checkUser || !checkPass) {
+                        logger('WARN', 'AUTH', 'Campos continuam vazios após injeção. Tentando teclado físico...');
+                        await userField.focus();
+                        await page.keyboard.press('Control+A');
+                        await page.keyboard.press('Backspace');
+                        await page.keyboard.type(IG_USER, { delay: 100 });
+                    }
 
                     // 4️⃣ Botão de submit
                     const SUBMIT_SELECTORS = [
