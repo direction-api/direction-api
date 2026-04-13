@@ -4,7 +4,6 @@ chromium.use(stealth);
 const amqplib = require('amqplib');
 const redis = require('redis');
 const fs = require('fs');
-const path = require('path');
 
 let amqpChannel = null;
 let redisClient = null;
@@ -16,7 +15,7 @@ const IG_PASS = process.env.IG_PASSWORD;
 const INSTANCE_ID = process.env.INSTANCE_NAME;
 const RABBITMQ_URI = process.env.RABBITMQ_URI || 'amqp://localhost';
 const REDIS_URI = process.env.REDIS_URI || 'redis://localhost:6379';
-const BROWSER_DATA_DIR = `/app/browser_data/session_${IG_USER}`;
+const BROWSER_DATA_DIR = `/app/browser_data/session_${INSTANCE_ID}`; // Ajustado para evitar conflito de pasta
 
 const logger = (lvl, mod, msg) => console.log(`[${new Date().toISOString()}] [${lvl}] [${mod}] ${msg}`);
 
@@ -84,7 +83,7 @@ async function performLogin(page) {
         logger('INFO', 'AUTH', '✅ Sessão salva. Login concluído!');
     } catch (err) {
         const stamp = Date.now();
-        await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` });
+        await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` }).catch(() => { });
         throw err;
     }
 }
@@ -130,7 +129,7 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // 📬 MOTOR DE ENVIO (OUTBOUND) - Ouve apenas a sua própria fila
+            // 📬 MOTOR DE ENVIO (OUTBOUND)
             amqpChannel.consume(`enviar_mensagem_${INSTANCE_ID}`, async (msg) => {
                 if (!msg) return;
                 isPaused = true;
@@ -154,40 +153,47 @@ async function fetchInstagramAPI(page) {
             });
 
             // 📨 MOTOR DE RECEBIMENTO (INBOUND)
-            setInterval(async () => {
-                if (isPaused) return;
-                const data = await fetchInstagramAPI(browserPage);
-                if (data?.inbox?.threads) {
-                    const myUserId = await browserPage.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
+            // AQUI FOI A CORREÇÃO: Removi o setInterval e coloquei um while travado com await.
+            while (true) {
+                if (!isPaused) {
+                    const data = await fetchInstagramAPI(browserPage);
+                    if (data?.inbox?.threads) {
+                        const myUserId = await browserPage.evaluate(() => document.cookie.match(/ds_user_id=([^;]+)/)?.[1]);
 
-                    for (const thread of data.inbox.threads) {
-                        for (const item of thread.items) {
-                            if (item.item_type === 'text' && String(item.user_id) !== String(myUserId)) {
-                                const seen = await redisClient.get(`seen:${INSTANCE_ID}:${item.item_id}`);
-                                if (!seen) {
-                                    // EXTRACT USERNAME CORRETO
-                                    const senderObj = thread.users.find(u => String(u.pk) === String(item.user_id));
-                                    const realUsername = senderObj ? senderObj.username : 'desconhecido';
+                        for (const thread of data.inbox.threads) {
+                            for (const item of thread.items) {
+                                if (item.item_type === 'text' && String(item.user_id) !== String(myUserId)) {
+                                    const seen = await redisClient.get(`seen:${INSTANCE_ID}:${item.item_id}`);
+                                    if (!seen) {
+                                        const senderObj = thread.users.find(u => String(u.pk) === String(item.user_id));
+                                        const realUsername = senderObj ? senderObj.username : 'desconhecido';
 
-                                    const payload = {
-                                        metadata: { instanceId: INSTANCE_ID },
-                                        sender: { username: realUsername, threadId: thread.thread_id },
-                                        message: { id: item.item_id, text: item.text }
-                                    };
+                                        const payload = {
+                                            metadata: { instanceId: INSTANCE_ID },
+                                            sender: { username: realUsername, threadId: thread.thread_id },
+                                            message: { id: item.item_id, text: item.text }
+                                        };
 
-                                    amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
-                                    await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
-                                    logger('INFO', 'INBOUND', `📩 Nova mensagem recebida de @${realUsername}`);
+                                        amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
+                                        await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
+                                        logger('INFO', 'INBOUND', `📩 Nova mensagem recebida de @${realUsername}`);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }, 5000);
+
+                // Essa linha trava o código por 5s, impedindo que ele enlouqueça e repita logs.
+                await browserPage.waitForTimeout(5000);
+
+                // Se o instagram deslogar de repente, força a reinicialização segura
+                if (browserPage.url().includes('login')) throw new Error('SESSION_LOST');
+            }
 
         } catch (e) {
             logger('ERROR', 'CORE', `Morte detectada: ${e.message}`);
-            if (browser) await browser.close();
+            if (browser) await browser.close().catch(() => { });
             await new Promise(r => setTimeout(r, 60000));
         }
     }
