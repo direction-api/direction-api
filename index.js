@@ -240,39 +240,16 @@ async function runEngine(page) {
                     await userField.waitFor({ state: 'visible', timeout: 25000 });
                     logger('INFO', 'AUTH', 'Formulário encontrado. Preenchendo credenciais...');
 
-                    // 2️⃣ Preencher usuário com delays humanizados
-                    // Usamos force: true para ignorar overlays invisíveis que bloqueiam o clique
+                    // 2️⃣ Preencher usuário e senha com .fill() (mais rápido e dispara eventos React/DOM corretamente)
                     await userField.focus();
-                    await userField.click({ delay: 80, force: true });
-                    await page.waitForTimeout(400 + Math.random() * 400);
-                    await userField.fill('');
-                    for (const char of IG_USER) {
-                        await page.keyboard.type(char, { delay: 65 + Math.random() * 110 });
-                    }
-
-                    await page.waitForTimeout(600 + Math.random() * 500);
-
-                    // 3️⃣ Campo de senha — múltiplos seletores
-                    const PASS_SELECTORS = [
-                        'input[name="password"]',
-                        'input[type="password"]',
-                        'input[aria-label*="senha"]',
-                        'input[aria-label*="password"]',
-                        'input[placeholder*="senha"]',
-                        'input[autocomplete="current-password"]'
-                    ].join(', ');
+                    await userField.fill(IG_USER);
+                    await page.waitForTimeout(500 + Math.random() * 500);
 
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.focus();
-                    await passField.click({ delay: 80, force: true });
-                    await page.waitForTimeout(400 + Math.random() * 400);
-                    await passField.fill('');
-                    for (const char of IG_PASS) {
-                        await page.keyboard.type(char, { delay: 65 + Math.random() * 110 });
-                    }
-
-                    await page.waitForTimeout(900 + Math.random() * 600);
+                    await passField.fill(IG_PASS);
+                    await page.waitForTimeout(800 + Math.random() * 500);
 
                     // 4️⃣ Botão de submit
                     const SUBMIT_SELECTORS = [
@@ -295,15 +272,34 @@ async function runEngine(page) {
                         await page.keyboard.press('Enter');
                     }
 
-                    // 5️⃣ Aguardar navegação
-                    await page.waitForTimeout(5000);
+                    // 5️⃣ Aguardar transição (Instagram é lento em VPS)
+                    await page.waitForTimeout(10000);
+                    
+                    // Lidar com tela de "Salvar informações de login?"
+                    const saveInfoBtn = page.locator('button:has-text("Salvar informações"), button:has-text("Save info")').first();
+                    if (await saveInfoBtn.isVisible({ timeout: 5000 })) {
+                        logger('INFO', 'AUTH', 'Tela "Salvar informações" detectada. Pulando...');
+                        await saveInfoBtn.click().catch(() => {});
+                        await page.waitForTimeout(3000);
+                    }
+
                     await dismissPopups(page);
 
                     const currentUrl = page.url();
-                    if (currentUrl.includes('login') && !currentUrl.includes('challenge') && !currentUrl.includes('two_factor')) {
-                        logger('FATAL', 'AUTH', `Login rejeitado pelo Instagram. URL atual: ${currentUrl}`);
-                        throw new Error('LOGIN_REJECTED');
+                    // Se ainda estiver na página de login e não houver desafio, fomos rejeitados
+                    if ((currentUrl.includes('login') || currentUrl.includes('accounts')) && 
+                        !currentUrl.includes('challenge') && !currentUrl.includes('two_factor') && !currentUrl.includes('checkpoint')) {
+                        
+                        logger('WARN', 'AUTH', 'Ainda na página de login. Tentando um Enter final...');
+                        await page.keyboard.press('Enter');
+                        await page.waitForTimeout(10000);
+                        
+                        if (page.url().includes('login')) {
+                            logger('FATAL', 'AUTH', `Login rejeitado pelo Instagram. URL atual: ${page.url()}`);
+                            throw new Error('LOGIN_REJECTED');
+                        }
                     }
+
 
                     // 6️⃣ Detecta desafio de verificação (2FA / captcha / checkpoint)
                     if (currentUrl.includes('challenge') || currentUrl.includes('two_factor') || currentUrl.includes('checkpoint')) {
