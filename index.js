@@ -49,19 +49,30 @@ function cleanupZombies() {
     } catch (e) { }
 }
 
-async function initializeServices() {
+async function initializeServices(retries = 15, delay = 3000) {
     if (!amqpChannel) {
-        const conn = await amqplib.connect(RABBITMQ_URI);
-        amqpChannel = await conn.createChannel();
-        await amqpChannel.assertQueue('mensagens', { durable: true });
-        await amqpChannel.assertQueue('enviar_mensagem', { durable: true });
-        logger('INFO', 'SERVICES', 'RabbitMQ & Redis connected');
+        for (let i = 1; i <= retries; i++) {
+            try {
+                const conn = await amqplib.connect(RABBITMQ_URI);
+                amqpChannel = await conn.createChannel();
+                await amqpChannel.assertQueue('mensagens', { durable: true });
+                await amqpChannel.assertQueue('enviar_mensagem', { durable: true });
+                logger('INFO', 'SERVICES', 'RabbitMQ conectado');
+                break;
+            } catch (err) {
+                logger('WARN', 'SERVICES', `RabbitMQ tentativa ${i}/${retries}: ${err.message}`);
+                if (i === retries) throw new Error(`RabbitMQ indisponível após ${retries} tentativas`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
     }
     if (!redisClient) {
         redisClient = redis.createClient({ url: REDIS_URI });
         await redisClient.connect();
+        logger('INFO', 'SERVICES', 'Redis conectado');
     }
 }
+
 
 // 🛡️ O "Mata-Popups" da Zennitex
 async function dismissPopups(page) {
