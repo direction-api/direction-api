@@ -114,7 +114,7 @@ async function fetchInstagramAPI(page) {
 
             logger('INFO', 'SYSTEM', '🚀 Instância do Bot Online!');
 
-            // 📬 MOTOR DE ENVIO (OUTBOUND)
+            // 📬 MOTOR DE ENVIO (OUTBOUND) - ATUALIZADO
             amqpChannel.consume(`enviar_mensagem_${INSTANCE_ID}`, async (msg) => {
                 if (!msg) return;
                 isPaused = true;
@@ -125,19 +125,32 @@ async function fetchInstagramAPI(page) {
                     const box = browserPage.locator('div[role="textbox"]').first();
                     await box.waitFor({ state: 'visible', timeout: 15000 });
 
-                    // O SEGREDO: Focus e Click forçado atravessam qualquer overlay invisível
                     await box.focus();
                     await box.click({ force: true });
 
+                    // Digita como um humano
                     await browserPage.keyboard.type(text, { delay: 50 });
-                    await browserPage.waitForTimeout(300); // Respiro pro React processar o DOM
+
+                    // 1º Segredo: Tempo pro React registrar o texto
+                    await browserPage.waitForTimeout(1000);
+
+                    // Tenta enviar com Enter
                     await browserPage.keyboard.press('Enter');
 
+                    // Fallback: Se o Enter falhar, clica no botão "Enviar"
+                    const btnSend = browserPage.locator('div[role="button"]:has-text("Enviar"), div[role="button"]:has-text("Send")').first();
+                    if (await btnSend.isVisible({ timeout: 1000 }).catch(() => false)) {
+                        await btnSend.click({ force: true });
+                    }
+
+                    // 2º Segredo: Espera a requisição de rede do Instagram terminar de enviar antes de sair da página
+                    await browserPage.waitForTimeout(2500);
+
                     amqpChannel.ack(msg);
-                    logger('INFO', 'OUTBOUND', `✅ Mensagem enviada para a thread ${threadId}`);
+                    logger('INFO', 'OUTBOUND', `✅ Mensagem FINALIZADA E ENVIADA para a thread ${threadId}`);
                 } catch (e) {
                     logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
-                    amqpChannel.nack(msg, false, true); // Reenfileira a msg em caso de falha
+                    amqpChannel.nack(msg, false, true);
                 } finally {
                     isPaused = false;
                     await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { });
