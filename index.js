@@ -114,7 +114,13 @@ async function fetchInstagramAPI(page) {
                 headers: {
                     'x-csrftoken': csrf,
                     'x-ig-app-id': '936619743392459',
-                    'x-requested-with': 'XMLHttpRequest'
+                    'x-requested-with': 'XMLHttpRequest',
+                    'x-asbd-id': '129477',
+                    'x-ig-www-claim': '0',
+                    'sec-ch-prefers-color-scheme': 'dark',
+                    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"'
                 }
             });
 
@@ -129,13 +135,22 @@ async function runEngine(page) {
 
     const currentUrl = page.url();
     if (!currentUrl.includes('direct/inbox') && !currentUrl.includes('direct/t/')) {
-        logger('WARN', 'CORE', `Redirecionado pela Meta (URL: ${currentUrl}). Tentando voltar...`);
+        // Se cair em uma tela de "checkpoint" ou "challenge", não mata a sessão de imediato, espera aprovação
+        if (currentUrl.includes('challenge') || currentUrl.includes('checkpoint')) {
+            logger('WARN', 'CORE', `⚠️  Interrupção na Meta detectada (Challenge). URL: ${currentUrl}`);
+            return; 
+        }
+
+        logger('WARN', 'CORE', `Redirecionado para: ${currentUrl}. Tentando voltar ao inbox...`);
         await dismissPopups(page);
-        await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' });
-        await page.waitForTimeout(2000);
+        await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.waitForTimeout(5000);
 
         if (!page.url().includes('direct/inbox')) {
-            throw new Error('SESSION_LOST');
+            // Se tentamos voltar e ele jogou pro login de novo, aí sim a sessão morreu
+            if (page.url().includes('login') || page.url().includes('accounts')) {
+                throw new Error('SESSION_LOST');
+            }
         }
         return;
     }
@@ -332,9 +347,12 @@ async function runEngine(page) {
                 await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
                 logger('INFO', 'AUTH', '✅ Sessão salva no Redis');
 
-                // Navega para o inbox
-                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded' });
-                await page.waitForTimeout(2000);
+                // Navega para o inbox e aguarda um tempo de estabilização extra (ESSENCIAL)
+                logger('INFO', 'AUTH', 'Estabilizando conexão com o Instagram...');
+                await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle' }).catch(() => {});
+                await page.waitForTimeout(10000);
+                await dismissPopups(page);
+                await dismissPopups(page);
             }
 
 
