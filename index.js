@@ -294,6 +294,7 @@ async function runEngine(page) {
 
                     // 2️⃣ Preencher usuário e senha com digitação humanizada
                     await userField.focus();
+                    await page.mouse.move(100 + Math.random() * 200, 100 + Math.random() * 200);
                     await page.click(USER_SELECTORS);
                     await page.keyboard.type(IG_USER, { delay: 100 + Math.random() * 50 });
                     await page.waitForTimeout(800 + Math.random() * 500);
@@ -310,6 +311,7 @@ async function runEngine(page) {
                     const passField = page.locator(PASS_SELECTORS).first();
                     await passField.waitFor({ state: 'visible', timeout: 10000 });
                     await passField.focus();
+                    await page.mouse.move(200 + Math.random() * 200, 200 + Math.random() * 200);
                     await page.click(PASS_SELECTORS);
                     await page.keyboard.type(IG_PASS, { delay: 100 + Math.random() * 50 });
                     await page.waitForTimeout(1000 + Math.random() * 500);
@@ -353,12 +355,20 @@ async function runEngine(page) {
                     let attempts = 0;
                     while (attempts < 6) {
                         const currentUrl = page.url();
+                        const cookies = await page.context().cookies();
+                        const hasSession = cookies.some(c => c.name === 'sessionid');
+                        const hasUser = cookies.some(c => c.name === 'ds_user_id');
+
+                        if (hasSession && hasUser) {
+                            logger('INFO', 'AUTH', '✅ Prova Real encontrada: Cookies de sessão ativos.');
+                            break; 
+                        }
+
                         if (currentUrl.includes('direct/inbox') || currentUrl.includes('direct/t/')) break;
 
                         if (currentUrl.includes('challenge') || currentUrl.includes('checkpoint')) {
-                            logger('WARN', 'AUTH', `⚠️ Desafio detectado: ${currentUrl}. Tentando autodismiss...`);
-                            // Tenta clicar em botões de "Fui eu" ou "Confirmar"
-                            const challengeBtns = page.locator('button:has-text("Fui eu"), button:has-text("This was me"), button:has-text("Confirmar"), button:has-text("Confirm")');
+                            logger('WARN', 'AUTH', `⚠️ Desafio detectado: ${currentUrl}.`);
+                            const challengeBtns = page.locator('button:has-text("Fui eu"), button:has-text("This was me"), button:has-text("Confirmar")');
                             if (await challengeBtns.first().isVisible({ timeout: 2000 })) {
                                 await challengeBtns.first().click().catch(() => {});
                                 await page.waitForTimeout(5000);
@@ -369,21 +379,19 @@ async function runEngine(page) {
                         attempts++;
                     }
 
-                    // Espera por um elemento real do inbox aparecer
-                    const inboxLoaded = await page.locator('div[role="tablist"], .x1n2onr6, a[href*="/direct/t/"]').first().isVisible({ timeout: 10000 }).catch(() => false);
-                    const hasUserCookie = await page.evaluate(() => document.cookie.includes('ds_user_id'));
+                    // Prova Final
+                    const finalCookies = await page.context().cookies();
+                    const isSuccess = finalCookies.some(c => c.name === 'sessionid');
 
-                    if (inboxLoaded && hasUserCookie) {
-                        logger('INFO', 'AUTH', '✅ Inbox renderizado e cookies de sessão presentes.');
+                    if (isSuccess) {
+                        logger('INFO', 'AUTH', '✅ Sucesso absoluto confirmado.');
                         await redisClient.set(`ai_session:${IG_USER}`, JSON.stringify(await context.storageState()));
-                        logger('INFO', 'AUTH', 'Sessão persistida no Redis.');
                     } else {
                         const currentUrl = page.url();
-                        if (currentUrl.includes('login') || currentUrl.includes('accounts')) {
-                            logger('FATAL', 'AUTH', 'Sessão bloqueada ou IP rejeitado pela Meta.');
-                            throw new Error('LOGIN_REJECTED');
-                        }
-                        logger('WARN', 'AUTH', 'Inbox não renderizou totalmente, mas tentando seguir...');
+                        // Diagnóstico por texto na tela
+                        const pageText = await page.evaluate(() => document.body.innerText.slice(0, 500).replace(/\n/g, ' '));
+                        logger('FATAL', 'AUTH', `Login falhou. URL: ${currentUrl} | Texto na tela: ${pageText}`);
+                        throw new Error('LOGIN_REJECTED');
                     }
                 } catch (err) {
                     if (err.message === 'LOGIN_REJECTED') throw err;

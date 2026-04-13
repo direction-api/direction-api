@@ -20,13 +20,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 const runningInstances = new Map();
 
 // --- POSTGRES ---
-const pgClient = new Client({
-    connectionString: process.env.POSTGRES_URI || 'postgres://postgres:postgres@localhost:5432/direction_db'
-});
+let pgClient = null;
 
 async function connectWithRetry(retries = 10, delay = 3000) {
     for (let i = 1; i <= retries; i++) {
         try {
+            // Se já houver um cliente, tenta fechar antes de criar um novo (garantia)
+            if (pgClient) { try { await pgClient.end(); } catch (e) { } }
+            
+            pgClient = new Client({
+                connectionString: process.env.POSTGRES_URI || 'postgres://postgres:postgres@localhost:5432/direction_db'
+            });
+
             await pgClient.connect();
             console.log('✅ PostgreSQL conectado');
             return;
