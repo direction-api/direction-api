@@ -39,7 +39,7 @@ async function forwardToWebhook(payload) {
         if (!response.ok) {
             logger('WARN', 'WEBHOOK', `Erro HTTP ao enviar webhook: ${response.status}`);
         } else {
-            logger('INFO', 'WEBHOOK', '✅ Webhook disparado com sucesso');
+            logger('INFO', 'WEBHOOK', 'Webhook disparado com sucesso');
         }
     } catch (err) {
         logger('ERROR', 'WEBHOOK', `Falha de rede ao disparar webhook: ${err.message}`);
@@ -49,7 +49,7 @@ async function forwardToWebhook(payload) {
 async function start() {
     try {
         const channel = await connectRabbit();
-        logger('INFO', 'WORKER', '🚀 Consumer online. Aguardando mensagens na fila...');
+        logger('INFO', 'WORKER', 'Consumer online. Aguardando mensagens na fila.');
 
         channel.consume('mensagens', async (msg) => {
             if (!msg) return;
@@ -60,7 +60,6 @@ async function start() {
 
                 await client.query('BEGIN');
 
-                // Grava ou atualiza contato
                 const contactResult = await client.query(`
                     INSERT INTO contacts (instance_id, username, thread_id)
                     VALUES ($1, $2, $3)
@@ -69,7 +68,6 @@ async function start() {
                     RETURNING id
                 `, [metadata.instanceId, sender.username, sender.threadId]);
 
-                // Grava a mensagem
                 await client.query(`
                     INSERT INTO messages (contact_id, instance_id, text, external_id)
                     VALUES ($1, $2, $3, $4)
@@ -85,7 +83,7 @@ async function start() {
             } catch (e) {
                 await client.query('ROLLBACK').catch(() => { });
                 logger('ERROR', 'DB', `Falha ao processar mensagem: ${e.message}`);
-                channel.nack(msg, false, true); // Reenfileira em caso de falha de banco
+                channel.nack(msg, false, true);
             } finally {
                 client.release();
             }

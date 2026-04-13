@@ -19,7 +19,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const runningInstances = new Map();
 
-// --- POSTGRES (Usando Pool para múltiplas conexões) ---
 const pool = new Pool({
     connectionString: process.env.POSTGRES_URI || 'postgres://postgres:postgres@localhost:5432/direction_db',
     max: 20
@@ -80,12 +79,8 @@ async function ensureTables() {
     console.log('✅ Tabelas verificadas/criadas com sucesso');
 }
 
-// --- REDIS ---
 const redisClient = redis.createClient({ url: process.env.REDIS_URI || 'redis://localhost:6379' });
 
-// ============================================================
-// ROTAS DE API
-// ============================================================
 app.post('/api/auth', (req, res) => {
     const incoming = (req.body.apiKey || '').trim();
     if (!GLOBAL_API_KEY) return res.status(500).json({ success: false, error: 'GLOBAL_API_KEY não configurada.' });
@@ -165,12 +160,9 @@ app.post('/api/instances/:token/disconnect', async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// 🚀 ROTA DE ENVIO DIRETA (SINCRONIZADA COM A INSTÂNCIA CORRETA)
-// 🚀 ROTA DE ENVIO DIRETA (BLINDADA CONTRA REQUISIÇÕES VAZIAS)
 app.post('/api/send/:token', async (req, res) => {
     const { token } = req.params;
 
-    // 🛡️ BLINDAGEM: Se o n8n mandar sem Content-Type ou vazio, evita o crash
     const body = req.body || {};
     const { threadId, text } = body;
 
@@ -214,9 +206,9 @@ async function autoRestart() {
             });
             scraper.on('exit', () => runningInstances.delete(inst.token));
             runningInstances.set(inst.token, scraper);
-            console.log(`♻️  Auto-reconectando instância: ${inst.token}`);
+            console.log(`Auto-reconectando instância: ${inst.token}`);
         }
-    } catch (err) { console.error('❌ autoRestart error:', err.message); }
+    } catch (err) { console.error('autoRestart error:', err.message); }
 }
 
 async function startup() {
@@ -225,7 +217,7 @@ async function startup() {
     await redisClient.connect().catch(err => { console.error('❌ Erro Redis:', err.message); process.exit(1); });
     fork('consumer.js');
     app.listen(PORT, () => {
-        console.log(`🚀 Direction API rodando em http://0.0.0.0:${PORT}`);
+        console.log(`Direction API rodando em http://0.0.0.0:${PORT}`);
         setTimeout(autoRestart, 3000);
     });
 }

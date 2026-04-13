@@ -58,23 +58,16 @@ async function performLogin(page) {
         await page.keyboard.press('Enter');
         logger('INFO', 'AUTH', 'Enter enviado. Aguardando validação das credenciais...');
 
-        // 1. Espera apenas sair da tela de login (significa que a senha estava certa)
         await page.waitForFunction(() => !document.URL.includes('accounts/login'), { timeout: 60000 });
 
         logger('INFO', 'AUTH', `Redirecionado para: ${page.url()}`);
 
-        // 2. O PULO DO GATO: Salva os cookies IMEDIATAMENTE.
-        // Não importa se caiu no OneTap, a sessão já é válida.
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
         logger('INFO', 'AUTH', '✅ Cookies de sessão ROUBADOS E SALVOS com sucesso!');
 
-        // 3. Tenta forçar a ida pro Inbox de forma rápida.
-        // Se o Instagram der timeout ou bloquear, o erro "Morte detectada" vai reiniciar o bot.
-        // Só que no próximo boot, ele já tem os cookies e pula o login direto.
         await page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'domcontentloaded', timeout: 15000 });
 
     } catch (err) {
-        // Se der erro aqui (como timeout), não tem problema se os cookies já foram salvos.
         logger('WARN', 'AUTH', 'Ocorreu um travamento, mas a sessão pode já estar garantida para o próximo boot.');
         throw err;
     }
@@ -127,17 +120,24 @@ async function fetchInstagramAPI(page) {
                 isPaused = true;
                 const { threadId, text } = JSON.parse(msg.content.toString());
                 try {
-                    await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`);
+                    await browserPage.goto(`https://www.instagram.com/direct/t/${threadId}/`, { waitUntil: 'domcontentloaded' });
+
                     const box = browserPage.locator('div[role="textbox"]').first();
-                    await box.waitFor({ state: 'visible' });
-                    await box.click();
+                    await box.waitFor({ state: 'visible', timeout: 15000 });
+
+                    // O SEGREDO: Focus e Click forçado atravessam qualquer overlay invisível
+                    await box.focus();
+                    await box.click({ force: true });
+
                     await browserPage.keyboard.type(text, { delay: 50 });
+                    await browserPage.waitForTimeout(300); // Respiro pro React processar o DOM
                     await browserPage.keyboard.press('Enter');
+
                     amqpChannel.ack(msg);
                     logger('INFO', 'OUTBOUND', `✅ Mensagem enviada para a thread ${threadId}`);
                 } catch (e) {
                     logger('ERROR', 'OUTBOUND', `Falha no envio: ${e.message}`);
-                    amqpChannel.nack(msg, false, true);
+                    amqpChannel.nack(msg, false, true); // Reenfileira a msg em caso de falha
                 } finally {
                     isPaused = false;
                     await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { });
@@ -182,7 +182,7 @@ async function fetchInstagramAPI(page) {
         } catch (e) {
             logger('ERROR', 'CORE', `Morte detectada: ${e.message}`);
             if (browser) await browser.close().catch(() => { });
-            await new Promise(r => setTimeout(r, 10000)); // Caiu pra 10s para reiniciar rápido e aproveitar o cookie
+            await new Promise(r => setTimeout(r, 10000));
         }
     }
 })();
