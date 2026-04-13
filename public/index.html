@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Direction API — Login</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            background: #fff;
+            color: #111;
+        }
+
+        /* LEFT — Brand Panel */
+        .left {
+            background: #0a0a0a;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 3rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .left-glow {
+            position: absolute;
+            width: 480px; height: 480px;
+            background: radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 70%);
+            top: -60px; right: -60px;
+            pointer-events: none;
+        }
+
+        .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-icon {
+            width: 38px; height: 38px;
+            background: #2563eb;
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .brand-icon svg { width: 20px; height: 20px; fill: none; stroke: white; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .brand-name { color: #fff; font-size: 1.1rem; font-weight: 700; }
+        .brand-tag { color: #555; font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; }
+
+        .left-main { position: relative; z-index: 1; }
+        .left-main h1 {
+            font-size: 2.5rem; font-weight: 800;
+            color: #fff; line-height: 1.15;
+            margin-bottom: 1.25rem;
+        }
+        .left-main h1 em { color: #2563eb; font-style: normal; }
+        .left-main p {
+            color: #777; font-size: 0.95rem; line-height: 1.7;
+            max-width: 380px;
+        }
+
+        .feature-list { position: relative; z-index: 1; list-style: none; }
+        .feature-list li {
+            display: flex; align-items: center; gap: 10px;
+            color: #444; font-size: 0.85rem;
+            margin-bottom: 0.6rem;
+        }
+        .feature-list li::before {
+            content: '';
+            width: 6px; height: 6px;
+            background: #2563eb;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* RIGHT — Form Panel */
+        .right {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            background: #fafafa;
+        }
+
+        .form-box { width: 100%; max-width: 360px; }
+
+        .form-box h2 {
+            font-size: 1.5rem; font-weight: 800;
+            margin-bottom: 0.4rem; color: #0a0a0a;
+        }
+        .form-box .subtitle {
+            color: #888; font-size: 0.875rem;
+            margin-bottom: 2.25rem;
+        }
+
+        .server-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f0f4ff;
+            border: 1px solid #dbeafe;
+            border-radius: 8px;
+            padding: 0.65rem 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.825rem;
+            color: #3b5cc2;
+        }
+        .server-badge-dot {
+            width: 7px; height: 7px;
+            background: #2563eb;
+            border-radius: 50%;
+            flex-shrink: 0;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+        }
+        .server-badge-url {
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .field { margin-bottom: 1.25rem; }
+        .field label {
+            display: block;
+            font-size: 0.75rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.06em;
+            color: #555; margin-bottom: 7px;
+        }
+        .input-wrap { position: relative; }
+        .input-icon {
+            position: absolute; left: 12px; top: 50%;
+            transform: translateY(-50%);
+            color: #bbb; font-size: 0.9rem;
+            pointer-events: none;
+            user-select: none;
+        }
+        .field input {
+            width: 100%;
+            padding: 0.8rem 1rem 0.8rem 2.4rem;
+            border: 1.5px solid #e5e7eb;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.9rem;
+            background: #fff;
+            color: #0a0a0a;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .field input:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 0.85rem;
+            background: #0a0a0a;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.925rem; font-weight: 700;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+            margin-top: 0.25rem;
+        }
+        .btn-login:hover { background: #222; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
+        .btn-login:active { transform: none; }
+        .btn-login:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+        .error-box {
+            display: none;
+            margin-top: 1rem;
+            background: #fef2f2; color: #b91c1c;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 0.7rem 1rem;
+            font-size: 0.85rem; font-weight: 500;
+            text-align: center;
+        }
+
+        .spinner-inline {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        @media (max-width: 768px) {
+            body { grid-template-columns: 1fr; }
+            .left { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="left">
+        <div class="left-glow"></div>
+        <div class="brand-row">
+            <div class="brand-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            </div>
+            <div>
+                <div class="brand-name">Direction API</div>
+                <div class="brand-tag">Instagram Automation Platform</div>
+            </div>
+        </div>
+
+        <div class="left-main">
+            <h1>Instagram Direct<br>automation at<br><em>any scale.</em></h1>
+            <p>Gerencie centenas de contas simultâneas. Monitore mensagens, organize filas e conecte com qualquer ferramenta de automação.</p>
+        </div>
+
+        <ul class="feature-list">
+            <li>Multi-instância com isolamento completo</li>
+            <li>Sessões persistidas em Redis In-Memory</li>
+            <li>Fila de mensagens via RabbitMQ</li>
+            <li>Histórico relacional em PostgreSQL</li>
+        </ul>
+    </div>
+
+    <div class="right">
+        <div class="form-box">
+            <h2>Acesso Restrito</h2>
+            <p class="subtitle">Insira sua chave de API para continuar.</p>
+
+            <div class="server-badge">
+                <div class="server-badge-dot"></div>
+                <span>Servidor:&nbsp;</span>
+                <span class="server-badge-url" id="serverUrlDisplay"></span>
+            </div>
+
+            <div class="field">
+                <label>Global API Key</label>
+                <div class="input-wrap">
+                    <span class="input-icon">🔑</span>
+                    <input type="password" id="apiKey" placeholder="Sua chave secreta" autocomplete="current-password">
+                </div>
+            </div>
+
+            <button class="btn-login" id="btnLogin" onclick="login()">Acessar Dashboard</button>
+            <div class="error-box" id="errBox">Chave inválida. Verifique GLOBAL_API_KEY no seu .env</div>
+        </div>
+    </div>
+
+    <script>
+        // Redireciona se já autenticado
+        if (localStorage.getItem('dir_auth')) {
+            window.location.href = '/dashboard.html';
+        }
+
+        // Exibe a URL do servidor automaticamente
+        const serverOrigin = window.location.origin;
+        document.getElementById('serverUrlDisplay').textContent = serverOrigin;
+
+        document.getElementById('apiKey').addEventListener('keydown', e => {
+            if (e.key === 'Enter') login();
+        });
+
+        async function login() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const btn    = document.getElementById('btnLogin');
+            const err    = document.getElementById('errBox');
+
+            if (!apiKey) {
+                err.textContent = 'Digite sua Global API Key.';
+                err.style.display = 'block';
+                return;
+            }
+
+            btn.innerHTML = '<span class="spinner-inline"></span>Autenticando...';
+            btn.disabled  = true;
+            err.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apiKey })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    localStorage.setItem('dir_auth', '1');
+                    window.location.href = '/dashboard.html';
+                } else {
+                    err.textContent = data.error || 'Chave inválida. Verifique GLOBAL_API_KEY no .env';
+                    err.style.display = 'block';
+                    btn.innerHTML = 'Acessar Dashboard';
+                    btn.disabled  = false;
+                }
+            } catch {
+                err.textContent = 'Servidor inacessível. Verifique se o container está rodando.';
+                err.style.display = 'block';
+                btn.innerHTML = 'Acessar Dashboard';
+                btn.disabled  = false;
+            }
+        }
+    </script>
+</body>
+</html>

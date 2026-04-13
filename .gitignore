@@ -1,0 +1,23 @@
+# Dependências
+node_modules/
+
+# Variáveis de ambiente (NUNCA envie isso!)
+.env
+
+# Sessões e dumps
+session.json
+dom.html
+dump.js
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes locais
+postgres_data/
+redis_data/
+rabbitmq_data/

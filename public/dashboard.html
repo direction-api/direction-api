@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Direction API — Dashboard</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #f5f6fa;
+            --surface: #ffffff;
+            --border: #e8eaed;
+            --text: #111827;
+            --muted: #6b7280;
+            --accent: #2563eb;
+            --accent-hover: #1d4ed8;
+            --danger: #dc2626;
+            --danger-soft: #fef2f2;
+            --success: #16a34a;
+            --success-soft: #f0fdf4;
+            --warn-soft: #fffbeb;
+            --warn: #d97706;
+            --radius: 10px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
+            --shadow: 0 4px 12px rgba(0,0,0,0.07);
+        }
+
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+        /* SIDEBAR */
+        .sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0; width: 220px;
+            background: #0a0a0a; display: flex; flex-direction: column;
+            padding: 1.5rem 0.75rem; z-index: 100;
+        }
+        .sidebar-brand {
+            display: flex; align-items: center; gap: 10px;
+            padding: 0.5rem 0.75rem 2rem;
+        }
+        .brand-icon {
+            width: 30px; height: 30px; background: #2563eb; border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .brand-icon svg { width: 16px; height: 16px; fill: white; }
+        .brand-text { color: #fff; font-size: 0.95rem; font-weight: 700; line-height: 1.2; }
+        .brand-sub { color: #555; font-size: 0.65rem; letter-spacing: 0.04em; text-transform: uppercase; }
+
+        .nav-item {
+            display: flex; align-items: center; gap: 9px;
+            padding: 0.6rem 0.75rem; border-radius: 7px;
+            color: #555; font-size: 0.85rem; font-weight: 500;
+            cursor: pointer; transition: all 0.12s; margin-bottom: 2px;
+            text-decoration: none;
+        }
+        .nav-item.active { background: rgba(255,255,255,0.07); color: #fff; }
+        .nav-item:hover { background: rgba(255,255,255,0.05); color: #ccc; }
+        .nav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+        .sidebar-footer { margin-top: auto; }
+
+        /* MAIN */
+        .main { margin-left: 220px; min-height: 100vh; }
+
+        .topbar {
+            background: var(--surface); border-bottom: 1px solid var(--border);
+            padding: 0.9rem 2rem;
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 50;
+        }
+        .topbar-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+        .status-pill {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 0.75rem; font-weight: 600; color: var(--success);
+            background: var(--success-soft);
+            border: 1px solid #bbf7d0;
+            padding: 0.25rem 0.75rem; border-radius: 999px;
+        }
+        .status-dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+        /* CONTENT */
+        .content { padding: 2rem; max-width: 1200px; }
+
+        /* STATS */
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 2rem; }
+        .stat {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 1.25rem 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+        .stat-label { font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+        .stat-value { font-size: 2.25rem; font-weight: 800; line-height: 1; }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.green { color: var(--success); }
+        .stat-value.amber { color: var(--warn); }
+
+        /* SECTION */
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; }
+        .section-title { font-size: 1rem; font-weight: 700; }
+
+        .btn-primary {
+            background: var(--accent); color: #fff; border: none;
+            padding: 0.6rem 1.25rem; border-radius: 8px;
+            font-family: 'Inter', sans-serif; font-size: 0.85rem; font-weight: 600;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+
+        /* GRID */
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+
+        /* CARD */
+        .card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 1.5rem;
+            box-shadow: var(--shadow-sm);
+            transition: box-shadow 0.15s, transform 0.15s;
+            border-left: 3px solid var(--border);
+        }
+        .card:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+        .card.online { border-left-color: var(--success); }
+
+        .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; }
+        .inst-name { font-size: 1rem; font-weight: 700; margin-bottom: 3px; }
+        .inst-meta { font-size: 0.78rem; color: var(--muted); font-weight: 500; }
+
+        .badge {
+            display: flex; align-items: center; gap: 5px;
+            font-size: 0.72rem; font-weight: 700;
+            padding: 0.2rem 0.65rem; border-radius: 999px; white-space: nowrap;
+        }
+        .badge-dot { width: 5px; height: 5px; border-radius: 50%; }
+        .badge.online { background: var(--success-soft); color: var(--success); border: 1px solid #bbf7d0; }
+        .badge.online .badge-dot { background: var(--success); animation: pulse 2s infinite; }
+        .badge.offline { background: #f3f4f6; color: var(--muted); border: 1px solid var(--border); }
+        .badge.offline .badge-dot { background: #9ca3af; }
+
+        .token-box {
+            background: #f9fafb; border: 1px solid var(--border);
+            border-radius: 6px; padding: 0.6rem 0.75rem;
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 1.25rem;
+        }
+        .token-text {
+            font-family: 'Courier New', monospace; font-size: 0.73rem;
+            color: var(--muted); flex: 1; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        .copy-btn {
+            border: none; background: transparent; cursor: pointer;
+            color: var(--muted); padding: 2px 5px; border-radius: 4px;
+            transition: 0.12s; font-size: 0.75rem; flex-shrink: 0;
+        }
+        .copy-btn:hover { background: var(--border); color: var(--text); }
+
+        .actions { display: flex; gap: 0.5rem; }
+        .btn-action {
+            flex: 1; padding: 0.55rem 0.5rem; border: none; border-radius: 7px;
+            font-family: 'Inter', sans-serif; font-size: 0.82rem; font-weight: 600;
+            cursor: pointer; transition: 0.15s;
+        }
+        .btn-connect { background: #2563eb; color: #fff; }
+        .btn-connect:hover { background: #1d4ed8; }
+        .btn-disconnect { background: var(--warn-soft); color: var(--warn); border: 1px solid #fde68a; }
+        .btn-disconnect:hover { background: #fef3c7; }
+        .btn-del { flex: 0 0 auto; width: 36px; background: var(--danger-soft); color: var(--danger); border: 1px solid #fecaca; }
+        .btn-del:hover { background: #fee2e2; }
+
+        /* EMPTY */
+        .empty {
+            grid-column: 1/-1; text-align: center; padding: 4rem 2rem;
+            background: var(--surface); border-radius: var(--radius);
+            border: 2px dashed var(--border);
+        }
+        .empty-title { font-size: 1rem; font-weight: 700; margin-bottom: 0.4rem; }
+        .empty-sub { color: var(--muted); font-size: 0.875rem; margin-bottom: 1.5rem; }
+
+        /* MODAL */
+        .modal-bg {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            backdrop-filter: blur(3px);
+            display: none; align-items: center; justify-content: center; z-index: 999;
+        }
+        .modal-bg.active { display: flex; }
+        .modal {
+            background: #fff; border-radius: 14px; padding: 2rem;
+            width: 100%; max-width: 420px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.15);
+            animation: modalIn 0.18s ease;
+        }
+        @keyframes modalIn { from { opacity:0; transform:scale(0.96) translateY(8px); } to { opacity:1; transform:none; } }
+        .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+        .modal-head h3 { font-size: 1rem; font-weight: 700; }
+        .modal-close {
+            border: none; background: #f3f4f6; border-radius: 6px;
+            width: 28px; height: 28px; cursor: pointer; font-size: 0.9rem; color: #555;
+        }
+        .modal-close:hover { background: #e5e7eb; }
+
+        .field { margin-bottom: 1.1rem; }
+        .field label {
+            display: block; font-size: 0.75rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.05em;
+            color: #555; margin-bottom: 6px;
+        }
+        .field label span { color: var(--danger); }
+        .field input, .field .input-with-prefix {
+            width: 100%; padding: 0.7rem 0.9rem;
+            border: 1.5px solid #e5e7eb; border-radius: 8px;
+            font-family: 'Inter', sans-serif; font-size: 0.9rem; color: #111;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+        .prefix-wrap { position: relative; }
+        .prefix-sym {
+            position: absolute; left: 0.9rem; top: 50%;
+            transform: translateY(-50%); color: #9ca3af; font-size: 0.9rem;
+            pointer-events: none;
+        }
+        .prefix-wrap input { padding-left: 1.9rem; }
+
+        .modal-note { font-size: 0.78rem; color: var(--muted); margin-bottom: 1rem; line-height: 1.5; }
+        .modal-foot { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .btn-ghost {
+            background: #f3f4f6; color: var(--muted); border: none;
+            padding: 0.6rem 1rem; border-radius: 7px;
+            font-family: 'Inter', sans-serif; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+        }
+        .btn-ghost:hover { background: #e5e7eb; }
+
+        /* TOAST */
+        .toasts { position: fixed; bottom: 1.5rem; right: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; z-index: 9999; }
+        .toast {
+            display: flex; align-items: center; gap: 8px;
+            background: #111; color: #fff;
+            padding: 0.7rem 1.1rem; border-radius: 8px;
+            font-size: 0.85rem; font-weight: 500;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            animation: toastIn 0.25s ease;
+        }
+        @keyframes toastIn { from { opacity:0; transform:translateX(16px); } to { opacity:1; transform:none; } }
+        .toast.success { background: #166534; }
+        .toast.error { background: #991b1b; }
+        .toast.warn { background: #92400e; }
+        .toast-icon { font-size: 0.9rem; }
+
+        /* SPINNER */
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 5px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <nav class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+            </div>
+            <div>
+                <div class="brand-text">Direction API</div>
+                <div class="brand-sub">Instance Manager</div>
+            </div>
+        </div>
+
+        <a class="nav-item active">
+            <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            Instances
+        </a>
+
+        <div class="sidebar-footer">
+            <a class="nav-item" onclick="logout()" style="cursor:pointer; color:#555">
+                <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Sign out
+            </a>
+        </div>
+    </nav>
+
+    <div class="main">
+        <div class="topbar">
+            <div class="topbar-title">Instance Management</div>
+            <div class="status-pill">
+                <div class="status-dot"></div>
+                Server Online
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-label">Total Instances</div>
+                    <div class="stat-value blue" id="statTotal">—</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Connected</div>
+                    <div class="stat-value green" id="statOnline">—</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Disconnected</div>
+                    <div class="stat-value amber" id="statOffline">—</div>
+                </div>
+            </div>
+
+            <div class="section-header">
+                <span class="section-title">Instances</span>
+                <button class="btn-primary" onclick="openModal()">+ New Instance</button>
+            </div>
+
+            <div class="grid" id="grid"></div>
+        </div>
+    </div>
+
+    <!-- MODAL -->
+    <div class="modal-bg" id="modalBg">
+        <div class="modal">
+            <div class="modal-head">
+                <h3>New Instance</h3>
+                <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+            </div>
+
+            <div class="field">
+                <label>Instance Name</label>
+                <input type="text" id="newName" placeholder="e.g. Barbearia do Leonardo" autocomplete="off">
+            </div>
+            <div class="field">
+                <label>Instagram Username <span>*</span></label>
+                <div class="prefix-wrap">
+                    <span class="prefix-sym">@</span>
+                    <input type="text" id="newIgUser" placeholder="instagram_user" autocomplete="off">
+                </div>
+            </div>
+            <div class="field">
+                <label>Instagram Password <span>*</span></label>
+                <input type="password" id="newIgPass" placeholder="Account password">
+            </div>
+
+            <p class="modal-note">Credentials are stored securely and used exclusively to automate login in an isolated anonymous browser window.</p>
+
+            <div class="modal-foot">
+                <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" id="btnCreate" onclick="createInstance()">Create Instance</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+
+    <script>
+        if (!localStorage.getItem('dir_auth')) window.location.href = '/';
+
+        function logout() {
+            localStorage.removeItem('dir_auth');
+            window.location.href = '/';
+        }
+
+        // ---- TOAST ----
+        function toast(msg, type = 'default', dur = 3000) {
+            const icons = { success: '✓', error: '✗', warn: '!', default: 'i' };
+            const el = document.createElement('div');
+            el.className = `toast ${type}`;
+            el.innerHTML = `<span class="toast-icon">${icons[type] || 'i'}</span>${msg}`;
+            document.getElementById('toasts').appendChild(el);
+            setTimeout(() => el.remove(), dur);
+        }
+
+        // ---- CLIPBOARD ----
+        function copyToken(token) {
+            navigator.clipboard.writeText(token);
+            toast('Token copied to clipboard', 'success', 2000);
+        }
+
+        // ---- MODAL ----
+        function openModal() {
+            document.getElementById('modalBg').classList.add('active');
+            setTimeout(() => document.getElementById('newName').focus(), 80);
+        }
+        function closeModal() {
+            document.getElementById('modalBg').classList.remove('active');
+            ['newName','newIgUser','newIgPass'].forEach(id => document.getElementById(id).value = '');
+        }
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+        // ---- FETCH ----
+        async function fetchInstances() {
+            try {
+                const res = await fetch('/api/instances');
+                const data = await res.json();
+                renderGrid(data.instances || []);
+            } catch {
+                // silently ignore transient network errors during polling
+            }
+        }
+
+        function renderGrid(instances) {
+            const total = instances.length;
+            const online = instances.filter(i => i.status === 'Conectado').length;
+
+            document.getElementById('statTotal').textContent = total;
+            document.getElementById('statOnline').textContent = online;
+            document.getElementById('statOffline').textContent = total - online;
+
+            const grid = document.getElementById('grid');
+
+            if (total === 0) {
+                grid.innerHTML = `
+                    <div class="empty">
+                        <div class="empty-title">No instances yet</div>
+                        <p class="empty-sub">Create your first instance to start monitoring Instagram Direct.</p>
+                        <button class="btn-primary" onclick="openModal()">+ Create First Instance</button>
+                    </div>`;
+                return;
+            }
+
+            grid.innerHTML = instances.map(inst => {
+                const isOnline = inst.status === 'Conectado';
+                const created = new Date(inst.created_at).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+                const igTag = inst.ig_username
+                    ? `@${inst.ig_username}`
+                    : '<span style="color:#dc2626">No credentials</span>';
+
+                const mainBtn = isOnline
+                    ? `<button class="btn-action btn-disconnect" onclick="instanceAction('${inst.token}','disconnect',this)">Pause</button>`
+                    : `<button class="btn-action btn-connect" onclick="instanceAction('${inst.token}','connect',this)">Start Scraper</button>`;
+
+                return `
+                <div class="card ${isOnline ? 'online' : ''}">
+                    <div class="card-top">
+                        <div>
+                            <div class="inst-name">${inst.name}</div>
+                            <div class="inst-meta">${igTag} &middot; ${created}</div>
+                        </div>
+                        <div class="badge ${isOnline ? 'online' : 'offline'}">
+                            <span class="badge-dot"></span>
+                            ${isOnline ? 'Connected' : 'Disconnected'}
+                        </div>
+                    </div>
+                    <div class="token-box">
+                        <div class="token-text" title="${inst.token}">${inst.token}</div>
+                        <button class="copy-btn" onclick="copyToken('${inst.token}')" title="Copy token">Copy</button>
+                    </div>
+                    <div class="actions">
+                        ${mainBtn}
+                        <button class="btn-action btn-del" onclick="deleteInst('${inst.token}')" title="Delete instance">Del</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // ---- CREATE ----
+        async function createInstance() {
+            const name = document.getElementById('newName').value.trim();
+            const ig_username = document.getElementById('newIgUser').value.trim().replace('@','');
+            const ig_password = document.getElementById('newIgPass').value;
+
+            if (!name) return toast('Instance name is required.', 'warn');
+            if (!ig_username) return toast('Instagram username is required.', 'warn');
+            if (!ig_password) return toast('Instagram password is required.', 'warn');
+
+            const btn = document.getElementById('btnCreate');
+            btn.innerHTML = '<span class="spinner"></span>Creating...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/instances', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, ig_username, ig_password })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    toast(`Instance "${name}" created. Click Start Scraper to connect.`, 'success', 5000);
+                    closeModal();
+                    fetchInstances();
+                } else {
+                    toast(data.error || 'Creation failed.', 'error');
+                }
+            } catch {
+                toast('Network error.', 'error');
+            } finally {
+                btn.innerHTML = 'Create Instance';
+                btn.disabled = false;
+            }
+        }
+
+        // ---- ACTION ----
+        async function instanceAction(token, type, btn) {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner"></span>';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`/api/instances/${token}/${type}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    const msg = type === 'connect'
+                        ? 'Scraper started. A browser window will open.'
+                        : 'Instance paused. Session preserved in Redis.';
+                    toast(msg, 'success', 4000);
+                    setTimeout(fetchInstances, 1200);
+                } else {
+                    toast(data.error || 'Action failed.', 'error');
+                    btn.innerHTML = orig; btn.disabled = false;
+                }
+            } catch {
+                toast('Network error.', 'error');
+                btn.innerHTML = orig; btn.disabled = false;
+            }
+        }
+
+        // ---- DELETE ----
+        async function deleteInst(token) {
+            const ok = confirm('This will permanently:\n\n  - Stop the scraper if running\n  - Delete the Redis session\n  - Remove all data from the database\n\nThis cannot be undone. Continue?');
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/instances/${token}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.success) {
+                    toast('Instance deleted.', 'default');
+                } else {
+                    toast(data.error || 'Delete failed.', 'error');
+                }
+                fetchInstances();
+            } catch {
+                toast('Network error.', 'error');
+            }
+        }
+
+        fetchInstances();
+        setInterval(fetchInstances, 5000);
+    </script>
+</body>
+</html>
