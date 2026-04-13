@@ -10,7 +10,6 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-// ⚙️ ESCOPO GLOBAL
 let amqpChannel = null;
 let redisClient = null;
 let isPaused = false;
@@ -25,7 +24,6 @@ const BROWSER_DATA_DIR = `/app/browser_data/session_${IG_USER}`;
 
 const logger = (lvl, mod, msg) => console.log(`[${new Date().toISOString()}] [${lvl}] [${mod}] ${msg}`);
 
-// 🛠️ INICIALIZAÇÃO DE SERVIÇOS
 async function initializeServices() {
     if (!amqpChannel) {
         const conn = await amqplib.connect(RABBITMQ_URI);
@@ -41,9 +39,8 @@ async function initializeServices() {
     }
 }
 
-// 🔐 LOGIN BRUTO
 async function performLogin(page) {
-    logger('WARN', 'AUTH', 'Iniciando login bruto por injeção e Enter...');
+    logger('WARN', 'AUTH', 'Tela de login detectada. Iniciando preenchimento...');
     try {
         await page.waitForLoadState('networkidle');
         const inputs = page.locator('input');
@@ -55,19 +52,35 @@ async function performLogin(page) {
         await page.waitForTimeout(1000);
 
         await page.keyboard.press('Enter');
-        logger('INFO', 'AUTH', 'Aguardando redirecionamento...');
-        await page.waitForURL('**/direct/inbox/**', { timeout: 60000 });
+        logger('INFO', 'AUTH', 'Enter enviado. Monitorando fluxo de entrada...');
+
+        // 🛡️ DETECTOR DE FLUXO: Pode cair no Inbox, OneTap ou 2FA
+        await page.waitForFunction(() => {
+            const url = document.URL;
+            return url.includes('direct/inbox') || url.includes('onetap') || url.includes('accounts/login');
+        }, { timeout: 60000 });
+
+        // Se cair no OneTap (Salvar Informações), clica em "Agora não"
+        if (page.url().includes('onetap')) {
+            logger('INFO', 'AUTH', 'Detectado "Save Login Info". Pulando...');
+            const notNowBtn = page.locator('button:has-text("Agora não"), button:has-text("Not Now"), div[role="button"]:has-text("Agora não")').first();
+            if (await notNowBtn.isVisible({ timeout: 10000 })) {
+                await notNowBtn.click();
+            }
+        }
+
+        // Agora sim, espera o Inbox final
+        await page.waitForURL('**/direct/inbox/**', { timeout: 30000 });
 
         await page.context().storageState({ path: `${BROWSER_DATA_DIR}/state.json` });
-        logger('INFO', 'AUTH', '✅ Sessão salva!');
+        logger('INFO', 'AUTH', '✅ Sessão persistida!');
     } catch (err) {
         const stamp = Date.now();
-        await page.screenshot({ path: `${BROWSER_DATA_DIR}/crash_${stamp}.png` });
+        await page.screenshot({ path: `${BROWSER_DATA_DIR}/login_crash_${stamp}.png` });
         throw err;
     }
 }
 
-// 📡 FETCH API INTERNA
 async function fetchInstagramAPI(page) {
     if (isPaused) return null;
     return await page.evaluate(async () => {
@@ -81,24 +94,21 @@ async function fetchInstagramAPI(page) {
     });
 }
 
-// 🚀 API HTTP PARA RESPOSTA
 app.post('/send', async (req, res) => {
     const { threadId, text } = req.body;
     if (!threadId || !text) return res.status(400).json({ error: 'Faltam dados' });
-
     try {
         const payload = JSON.stringify({ threadId, text });
         amqpChannel.sendToQueue('enviar_mensagem', Buffer.from(payload), { persistent: true });
-        return res.json({ success: true, message: 'Ordem postada na fila' });
+        return res.json({ success: true, message: 'Ordem na fila' });
     } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-// 🔄 MOTOR PRINCIPAL
 (async () => {
     if (!fs.existsSync(BROWSER_DATA_DIR)) fs.mkdirSync(BROWSER_DATA_DIR, { recursive: true });
     await initializeServices();
 
-    app.listen(3000, () => logger('INFO', 'API', 'Servidor rodando na porta 3000'));
+    app.listen(3000, () => logger('INFO', 'API', 'Porta 3000 pronta.'));
 
     while (true) {
         let browser = null;
@@ -124,7 +134,6 @@ app.post('/send', async (req, res) => {
 
             logger('INFO', 'SYSTEM', '🚀 Direction API Online!');
 
-            // 📬 OUTBOUND (ENVIO)
             amqpChannel.consume('enviar_mensagem', async (msg) => {
                 if (!msg) return;
                 isPaused = true;
@@ -137,15 +146,10 @@ app.post('/send', async (req, res) => {
                     await browserPage.keyboard.type(text, { delay: 50 });
                     await browserPage.keyboard.press('Enter');
                     amqpChannel.ack(msg);
-                    logger('INFO', 'OUTBOUND', `Mensagem enviada: ${threadId}`);
                 } catch (e) { amqpChannel.nack(msg, false, false); }
-                finally {
-                    isPaused = false;
-                    await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { });
-                }
+                finally { isPaused = false; await browserPage.goto('https://www.instagram.com/direct/inbox/').catch(() => { }); }
             });
 
-            // 📨 INBOUND (LEITURA)
             while (true) {
                 if (!isPaused) {
                     const data = await fetchInstagramAPI(browserPage);
@@ -163,7 +167,6 @@ app.post('/send', async (req, res) => {
                                         };
                                         amqpChannel.sendToQueue('mensagens', Buffer.from(JSON.stringify(payload)), { persistent: true });
                                         await redisClient.set(`seen:${INSTANCE_ID}:${item.item_id}`, '1', { EX: 86400 });
-                                        logger('INFO', 'INBOUND', `Nova mensagem.`);
                                     }
                                 }
                             }
@@ -174,7 +177,7 @@ app.post('/send', async (req, res) => {
                 if (browserPage.url().includes('login')) throw new Error('SESSION_LOST');
             }
         } catch (e) {
-            logger('ERROR', 'CORE', `Erro: ${e.message}`);
+            logger('ERROR', 'CORE', `Morte: ${e.message}`);
             if (browser) await browser.close();
             await new Promise(r => setTimeout(r, 60000));
         }
